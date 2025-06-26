@@ -1,8 +1,16 @@
 # EKray
-Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, Hysteria2, VLESS, WireGuard), with advanced tunneling &amp; security.
+Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, Hysteria2, VLESS, WireGuard), with advanced tunneling & security.
 
+---
 
+## 🚦 راهنمای نصب سریع (Quick Start)
 
+۱. یک سرور Ubuntu 20.04 یا 22.04 تهیه کنید (VPS، سرور ابری، یا حتی ماشین مجازی).
+
+۲. ترمینال را باز کنید و دستور زیر را وارد کنید:
+
+```bash
+bash <(curl -sSL https://github.com/edwardium/EKray/raw/main/install.sh)
 
 # 🟩 پروژه ضد فیلتر نسل جدید (Next-Gen Anti-Filter Engine)
 
