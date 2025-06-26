@@ -9,7 +9,7 @@
 - امکان مدیریت همزمان چند کاربر و چند پروتکل
 - استتار پیشرفته، امکانات مدیریتی کامل، تونلینگ تقویتی و امکانات آینده‌نگر
 
-## en
+##
 Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, Hysteria2, VLESS, WireGuard), with advanced tunneling & security.
 
 ---
@@ -19,10 +19,13 @@ Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, H
 ۱. یک سرور Ubuntu 20.04 یا 22.04 تهیه کنید (VPS، سرور ابری، یا حتی ماشین مجازی).
 
 ۲. ترمینال را باز کنید و دستور زیر را وارد کنید:
-
-### bash
-bash <(curl -sSL https://github.com/edwardium/EKray/raw/main/install.sh)
-
+```markdown
+> 🚦 **Quick Install:**
+> Copy & Paste in your terminal:
+>
+> ```bash
+> bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+> ```
 ---
 
 
