@@ -24,7 +24,7 @@ Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, H
 > Copy & Paste in your terminal:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/edwardium/EKray/main/install.sh)
 
 ```
 
