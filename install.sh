@@ -3,7 +3,7 @@
 # =================================================================
 # EKray - Smart Management Script
 # Version: 0.6 (International & Robust)
-# Author: Kaveh & Edward
+# Author: Edward & Kaveh
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
 
