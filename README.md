@@ -1,6 +1,3 @@
-پنل ضد فیلتر نسل جدید برای اوبونتو؛ مدیریت چندکاربره و تونلینگ پیشرفته با sing-box و هسته‌های Reality، Hysteria2 و ...
-
-
 # EKray
 Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, Hysteria2, VLESS, WireGuard), with advanced tunneling &amp; security.
 
