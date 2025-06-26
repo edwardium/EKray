@@ -9,7 +9,7 @@ Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, H
 
 ۲. ترمینال را باز کنید و دستور زیر را وارد کنید:
 
-```bash
+# bash
 bash <(curl -sSL https://github.com/edwardium/EKray/raw/main/install.sh)
 
 # 🟩 پروژه ضد فیلتر نسل جدید (Next-Gen Anti-Filter Engine)
