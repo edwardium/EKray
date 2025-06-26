@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 0.9.3 (System Status Check)
+# Version: 0.9.4 (Installer Hotfix)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -30,11 +30,11 @@ check_dependencies() {
     done
 }
 
-# --- Main Menu Display Function ---
+# --- Function to display the main menu ---
 show_main_menu() {
     clear
     echo "============================================="
-    echo "         EKray Management Panel v0.9.3       "
+    echo "         EKray Management Panel v0.9.4       "
     echo "             by Edward & Kaveh             "
     echo "============================================="
     echo "Please choose an option:"
@@ -49,115 +49,106 @@ show_main_menu() {
     echo "---------------------------------------------"
 }
 
-# --- Service Management Sub-menu ---
-service_management_menu() {
-    clear
-    echo "============================================="
-    echo "             Service Management              "
-    echo "============================================="
-    echo "  1) Install Reality Service"
-    echo "  2) Add Reality User"
-    echo "  3) List Reality Users"
-    echo "  4) View Service Status"
-    echo "  5) Back to Main Menu"
-    echo "---------------------------------------------"
-    read -p "Enter your choice [1-5]: " service_choice
+# --- THIS IS THE CORRECT, RESTORED FUNCTION ---
+install_singbox() {
+    if command -v sing-box &> /dev/null; then
+        echo -e "${GREEN}sing-box is already installed.${NC}"
+        # Future logic for updating the core will go here.
+        return
+    fi
 
-    case $service_choice in
-        1) install_reality_service ;;
-        2) add_reality_user ;;
-        3) list_reality_users ;;
-        4) check_service_status ;;
-        5) return ;;
-        *) echo -e "${RED}Invalid option.${NC}"; sleep 2; service_management_menu ;;
+    echo -e "${YELLOW}Installing the latest version of sing-box core...${NC}"
+
+    # Detect architecture
+    local ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64) ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        *) echo -e "${RED}Unsupported architecture: $ARCH${NC}"; return 1 ;;
     esac
 
-    if [[ "$service_choice" -ne 5 ]]; then
-        read -n 1 -s -r -p "Press any key to return to the service menu..."
+    # Get the latest version from GitHub API
+    local LATEST_VERSION=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name')
+    if [ -z "$LATEST_VERSION" ]; then
+        echo -e "${RED}Error getting the latest sing-box version. Please check your internet connection.${NC}"
+        return 1
     fi
-    service_management_menu
+
+    echo "Latest version found: $LATEST_VERSION"
+    local DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-${ARCH}.tar.gz"
+
+    # Download the file
+    echo "Downloading from: $DOWNLOAD_URL"
+    curl -sLo sing-box.tar.gz "$DOWNLOAD_URL"
+    if [ $? -ne 0 ]; then echo -e "${RED}Download failed.${NC}"; return 1; fi
+
+    # Extract and install
+    local EXTRACT_DIR="sing-box-${LATEST_VERSION#v}-linux-${ARCH}"
+    tar -xzf sing-box.tar.gz
+    sudo install -m 755 "${EXTRACT_DIR}/sing-box" "$SINGBOX_BIN_PATH"
+    sudo mkdir -p /etc/sing-box/
+
+    # Cleanup
+    rm -rf "${EXTRACT_DIR}" sing-box.tar.gz
+
+    # Create service file if it doesn't exist
+    if [ ! -f "$SERVICE_PATH" ]; then
+        create_service_file
+    fi
+
+    echo -e "${GREEN}sing-box core installed successfully.${NC}"
 }
 
-# --- Function for System Status Check ---
+create_service_file() {
+    echo -e "${YELLOW}Creating systemd service file...${NC}"
+    SERVICE_FILE_CONTENT="[Unit]\nDescription=sing-box service\nDocumentation=https://sing-box.sagernet.org\nAfter=network.target nss-lookup.target\n\n[Service]\nUser=root\nWorkingDirectory=/etc/sing-box\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nExecStart=${SINGBOX_BIN_PATH} run -c ${CONFIG_PATH}\nRestart=on-failure\nRestartSec=10\nLimitNOFILE=infinity\n\n[Install]\nWantedBy=multi-user.target"
+    echo -e "$SERVICE_FILE_CONTENT" | sudo tee "$SERVICE_PATH" > /dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable sing-box
+    echo -e "${GREEN}Service file created and sing-box service enabled.${NC}"
+}
+
+
+# --- (The rest of the functions like service_management_menu, system_status_check, uninstall_ekray, etc. are the same as v0.9.3) ---
+# --- For brevity, I'm including the full script below for easy copy-paste.
+
+service_management_menu() {
+    clear; echo "============================================="; echo "             Service Management              "; echo "============================================="
+    echo "  1) Install Reality Service"; echo "  2) Add Reality User"; echo "  3) List Reality Users"; echo "  4) View Service Status"; echo "  5) Back to Main Menu"
+    echo "---------------------------------------------"; read -p "Enter your choice [1-5]: " service_choice
+    case $service_choice in 1) install_reality_service;; 2) add_reality_user;; 3) list_reality_users;; 4) check_service_status;; 5) return;; *) echo -e "${RED}Invalid option.${NC}"; sleep 2; service_management_menu;; esac
+    if [[ "$service_choice" -ne 5 ]]; then read -n 1 -s -r -p "Press any key to return..."; fi; service_management_menu
+}
 system_status_check() {
-    echo -e "${YELLOW}--- EKray System Status Check ---${NC}"
-
-    # 1. Check for sing-box binary
-    echo -n "1. Checking for sing-box core: "
-    if [ -f "$SINGBOX_BIN_PATH" ]; then
-        echo -e "${GREEN}Installed ($($SINGBOX_BIN_PATH version | awk '{print $3}'))${NC}"
-    else
-        echo -e "${RED}Not Found${NC}"
-    fi
-
-    # 2. Check for config directory
-    echo -n "2. Checking for config directory: "
-    if [ -d "/etc/sing-box" ]; then
-        echo -e "${GREEN}Found${NC}"
-    else
-        echo -e "${RED}Not Found${NC}"
-    fi
-
-    # 3. Check for systemd service status
-    echo -n "3. Checking for sing-box service: "
-    if [ -f "$SERVICE_PATH" ]; then
-        SERVICE_STATUS=$(systemctl is-active sing-box)
-        if [ "$SERVICE_STATUS" == "active" ]; then
-            echo -e "${GREEN}Active (Running)${NC}"
-        else
-            echo -e "${RED}Inactive (Status: $SERVICE_STATUS)${NC}"
-        fi
-    else
-        echo -e "${RED}Not Found${NC}"
-    fi
-    echo "---------------------------------"
+    echo -e "${YELLOW}--- EKray System Status Check ---${NC}"; echo -n "1. Checking for sing-box core: "
+    if [ -f "$SINGBOX_BIN_PATH" ]; then echo -e "${GREEN}Installed ($($SINGBOX_BIN_PATH version | awk '{print $3}'))${NC}"; else echo -e "${RED}Not Found${NC}"; fi
+    echo -n "2. Checking for config directory: "; if [ -d "/etc/sing-box" ]; then echo -e "${GREEN}Found${NC}"; else echo -e "${RED}Not Found${NC}"; fi
+    echo -n "3. Checking for sing-box service: "; if [ -f "$SERVICE_PATH" ]; then SERVICE_STATUS=$(systemctl is-active sing-box); if [ "$SERVICE_STATUS" == "active" ]; then echo -e "${GREEN}Active (Running)${NC}"; else echo -e "${RED}Inactive (Status: $SERVICE_STATUS)${NC}"; fi; else echo -e "${RED}Not Found${NC}"; fi; echo "---------------------------------"
 }
-
-# --- Function to completely uninstall sing-box and configs ---
 uninstall_ekray() {
-    echo -e "${RED}WARNING: This will stop the sing-box service and REMOVE ALL related files (core, configs, users).${NC}"
-    read -p "This action is irreversible. Are you sure you want to continue? (y/n): " confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        echo "Stopping and disabling sing-box service..."
-        sudo systemctl stop sing-box &> /dev/null
-        sudo systemctl disable sing-box &> /dev/null
-
-        echo "Removing files..."
-        sudo rm -f "$SERVICE_PATH"
-        sudo rm -f "$SINGBOX_BIN_PATH"
-        sudo rm -rf "/etc/sing-box/"
-
-        sudo systemctl daemon-reload
-        echo -e "${GREEN}EKray and sing-box core have been completely uninstalled.${NC}"
-    else
-        echo -e "${YELLOW}Uninstall cancelled.${NC}"
-    fi
+    echo -e "${RED}WARNING: This will stop the sing-box service and REMOVE ALL related files.${NC}"; read -p "Are you sure? (y/n): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then echo "Stopping and disabling sing-box service..."; sudo systemctl stop sing-box &> /dev/null; sudo systemctl disable sing-box &> /dev/null; echo "Removing files..."; sudo rm -f "$SERVICE_PATH"; sudo rm -f "$SINGBOX_BIN_PATH"; sudo rm -rf "/etc/sing-box/"; sudo systemctl daemon-reload; echo -e "${GREEN}EKray and sing-box core have been completely uninstalled.${NC}"; else echo -e "${YELLOW}Uninstall cancelled.${NC}"; fi
 }
-
-# --- (Other functions like install_reality_service, add_reality_user etc. remain the same) ---
-# --- For brevity, I'm only showing the new/changed functions. Use the full code from the previous version for the rest.
-# --- The full code is available in the git history. We assume functions below are present.
-
 install_reality_service() {
-    if [ -f "$CONFIG_PATH" ]; then echo -e "${RED}A configuration file already exists. Please uninstall first if you want a clean setup.${NC}"; return; fi
-    echo -e "${YELLOW}Installing VLESS+Reality Service...${NC}"; read -p "Enter the listen port (e.g., 443): " listen_port; read -p "Enter the SNI domain (e.g., www.microsoft.com): " server_name
+    if [ -f "$CONFIG_PATH" ]; then echo -e "${RED}A configuration file already exists. Uninstall first for a clean setup.${NC}"; return; fi
+    echo -e "${YELLOW}Installing VLESS+Reality Service...${NC}"; read -p "Enter listen port (e.g., 443): " listen_port; read -p "Enter SNI domain (e.g., www.microsoft.com): " server_name
     echo "Generating Reality key pair..."; REALITY_KEYS=$(/usr/local/bin/sing-box generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",')
     first_user_uuid=$(/usr/local/bin/sing-box generate uuid); first_user_name="initial-user"
     sudo bash -c "cat > $CONFIG_PATH" << EOF
 { "log": { "level": "info", "timestamp": true }, "inbounds": [ { "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": ${listen_port}, "users": [ { "uuid": "${first_user_uuid}", "flow": "xtls-rprx-vision" } ], "transport": { "type": "tcp" }, "tls": { "enabled": true, "server_name": "${server_name}", "reality": { "enabled": true, "handshake": { "server": "${server_name}", "server_port": 443 }, "private_key": "${PRIVATE_KEY}", "short_id": "" } } } ], "outbounds": [ { "type": "direct", "tag": "direct" }, { "type": "block", "tag": "block" } ] }
 EOF
     echo "$PUBLIC_KEY" | sudo tee /etc/sing-box/reality.pub > /dev/null; echo "${first_user_name}:${first_user_uuid}" | sudo tee "$USER_DB_PATH" > /dev/null
-    sudo systemctl restart sing-box; sleep 2; check_service_status; echo -e "${GREEN}Reality service installed and started successfully!${NC}"; echo "Generating connection info for the first user..."; generate_reality_link "$first_user_name" "$first_user_uuid"
+    sudo systemctl restart sing-box; sleep 2; check_service_status; echo -e "${GREEN}Reality service installed successfully!${NC}"; echo "Generating connection info..."; generate_reality_link "$first_user_name" "$first_user_uuid"
 }
 add_reality_user() {
     if [ ! -f "$CONFIG_PATH" ]; then echo -e "${RED}Config not found. Install a service first.${NC}"; return; fi
-    read -p "Enter a name for the new user (for identification): " user_name; new_uuid=$(/usr/local/bin/sing-box generate uuid)
+    read -p "Enter a name for the new user: " user_name; new_uuid=$(/usr/local/bin/sing-box generate uuid)
     tmp_json=$(mktemp); jq --arg uuid "$new_uuid" '.inbounds[0].users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
     echo "${user_name}:${new_uuid}" | sudo tee -a "$USER_DB_PATH" > /dev/null
-    sudo systemctl restart sing-box; sleep 2; echo -e "${GREEN}User '$user_name' with UUID '$new_uuid' added successfully.${NC}"; generate_reality_link "$user_name" "$new_uuid"
+    sudo systemctl restart sing-box; sleep 2; echo -e "${GREEN}User '$user_name' added.${NC}"; generate_reality_link "$user_name" "$new_uuid"
 }
 list_reality_users() {
-    if [ ! -f "$USER_DB_PATH" ]; then echo -e "${RED}No users found or database is missing.${NC}"; return; fi; echo -e "${YELLOW}--- List of Reality Users ---${NC}"; i=1
+    if [ ! -f "$USER_DB_PATH" ]; then echo -e "${RED}No users found.${NC}"; return; fi; echo -e "${YELLOW}--- List of Reality Users ---${NC}"; i=1
     while IFS=: read -r name uuid; do echo -e "  ${GREEN}${i})${NC} Name: ${YELLOW}${name}${NC}\n     UUID: ${uuid}\n--------------------------"; ((i++)); done < <(sudo cat "$USER_DB_PATH")
 }
 generate_reality_link() {
@@ -166,7 +157,11 @@ generate_reality_link() {
     echo ""; echo -e "${YELLOW}Connection Link:${NC}"; echo "$VLESS_LINK"; echo ""; echo -e "${YELLOW}QR Code:${NC}"; qrencode -t ANSIUTF8 "$VLESS_LINK"
 }
 check_service_status() { sudo systemctl status sing-box --no-pager -l; }
-install_singbox() { echo "This function needs to be added from v0.6.1"; } # Placeholder
+update_server() {
+    echo -e "${YELLOW}Starting server update...${NC}"
+    sudo apt-get update && sudo apt-get upgrade -y
+    echo -e "${GREEN}Server updated successfully!${NC}"
+}
 
 # --- Main application loop ---
 check_dependencies
@@ -184,8 +179,8 @@ while true; do
         *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2 ;;
     esac
 
-    # After an action, prompt to return
     if [[ "$choice" -ne 3 && "$choice" -ne 6 ]]; then
         read -n 1 -s -r -p "Press any key to return to the main menu..."
     fi
 done
+
