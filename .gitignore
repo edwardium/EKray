@@ -1,0 +1,38 @@
+# خروجی‌ها و لاگ‌ها
+*.log
+*.out
+*.err
+
+# فایل‌های swap و موقت ادیتورها
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+
+# تنظیمات و فایل‌های خصوصی
+.env
+config.ini
+secret.json
+private.key
+
+# پوشه‌های مخفی و کش
+.cache/
+.vscode/
+.idea/
+
+# پایتون (اگر اسکریپت پایتون اضافه کردی)
+__pycache__/
+*.pyc
+
+# node_modules/ (اگر بعداً js یا npm داشتی)
+node_modules/
+
+# فایل‌های بکاپ و پشتیبان خودکار
+*.old
+*.backup
+*.orig
+
+# خروجی build و نصب
+dist/
+build/
