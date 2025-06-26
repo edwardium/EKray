@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 0.9 (Reality Protocol Management)
+# Version: 0.9.1 (Reality Config Hotfix)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -18,7 +18,6 @@ CONFIG_PATH="/etc/sing-box/config.json"
 
 # --- Function to check for dependencies ---
 check_dependencies() {
-    # Add qrencode for QR code generation
     DEPS="curl jq qrencode"
     for dep in $DEPS; do
         if ! command -v "$dep" &> /dev/null; then
@@ -32,7 +31,7 @@ check_dependencies() {
 show_main_menu() {
     clear
     echo "============================================="
-    echo "         EKray Management Panel v0.9         "
+    echo "         EKray Management Panel v0.9.1       "
     echo "             by Edward & Kaveh             "
     echo "============================================="
     echo "Please choose an option:"
@@ -54,27 +53,44 @@ service_management_menu() {
     echo "  1) Install Reality Service"
     echo "  2) Add Reality User"
     echo "  3) View Service Status"
-    echo "  4) Back to Main Menu"
+    echo "  4) Uninstall Service (Clean Install)"
+    echo "  5) Back to Main Menu"
     echo "---------------------------------------------"
-    read -p "Enter your choice [1-4]: " service_choice
+    read -p "Enter your choice [1-5]: " service_choice
 
     case $service_choice in
         1) install_reality_service ;;
         2) add_reality_user ;;
         3) check_service_status ;;
-        4) return ;;
+        4) uninstall_service ;;
+        5) return ;;
         *) echo -e "${RED}Invalid option.${NC}"; sleep 2; service_management_menu ;;
     esac
     
     # After an action, prompt to return
-    read -n 1 -s -r -p "Press any key to return to the service menu..."
+    if [[ "$service_choice" -ne 5 ]]; then
+        read -n 1 -s -r -p "Press any key to return to the service menu..."
+    fi
     service_management_menu
+}
+
+# --- Function to uninstall and clean everything ---
+uninstall_service() {
+    echo -e "${RED}WARNING: This will stop the sing-box service and delete all configuration files.${NC}"
+    read -p "Are you sure you want to continue? (y/n): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        sudo systemctl stop sing-box
+        sudo rm -f "$CONFIG_PATH"
+        echo -e "${GREEN}Service uninstalled and configuration file removed.${NC}"
+    else
+        echo -e "${YELLOW}Uninstall cancelled.${NC}"
+    fi
 }
 
 # --- Function to install the first Reality service ---
 install_reality_service() {
     if [ -f "$CONFIG_PATH" ]; then
-        echo -e "${RED}A configuration file already exists. To prevent data loss, please use the management options.${NC}"
+        echo -e "${RED}A configuration file already exists. Please uninstall first using the menu.${NC}"
         return
     fi
     
@@ -90,6 +106,7 @@ install_reality_service() {
 
     # Create initial user
     first_user_uuid=$(/usr/local/bin/sing-box generate uuid)
+    first_user_name="initial-user"
 
     # Create config.json
     sudo bash -c "cat > $CONFIG_PATH" << EOF
@@ -123,7 +140,6 @@ install_reality_service() {
             "server_port": 443
           },
           "private_key": "${PRIVATE_KEY}",
-          "public_key": "${PUBLIC_KEY}",
           "short_id": ""
         }
       }
@@ -138,14 +154,26 @@ install_reality_service() {
       "type": "block",
       "tag": "block"
     }
-  ]
+  ],
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": ""
+    }
+  }
 }
 EOF
 
+    # Store public key separately for link generation (this is a simple method for now)
+    echo "$PUBLIC_KEY" | sudo tee /etc/sing-box/reality.pub > /dev/null
+
     sudo systemctl restart sing-box
     sleep 2 # Wait for service to restart
+    check_service_status
+
     echo -e "${GREEN}Reality service installed and started successfully!${NC}"
-    echo "Your first user UUID is: ${first_user_uuid}"
+    echo "Generating connection info for the first user..."
+    generate_reality_link "$first_user_name" "$first_user_uuid"
 }
 
 # --- Function to add a new Reality user ---
@@ -159,14 +187,13 @@ add_reality_user() {
     new_uuid=$(/usr/local/bin/sing-box generate uuid)
 
     # Add user to config using jq
-    # Create a temporary file to avoid issues with sudo and redirection
     tmp_json=$(mktemp)
     jq --arg uuid "$new_uuid" '.inbounds[0].users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"
     sudo mv "$tmp_json" "$CONFIG_PATH"
 
 
     sudo systemctl restart sing-box
-    sleep 2 # Wait for service to restart
+    sleep 2
     echo -e "${GREEN}User '$user_name' with UUID '$new_uuid' added successfully.${NC}"
 
     generate_reality_link "$user_name" "$new_uuid"
@@ -181,7 +208,8 @@ generate_reality_link() {
     local server_ip=$(curl -s ip.me)
     local port=$(jq '.inbounds[0].listen_port' $CONFIG_PATH)
     local sni=$(jq -r '.inbounds[0].tls.server_name' $CONFIG_PATH)
-    local pbk=$(jq -r '.inbounds[0].tls.reality.public_key' $CONFIG_PATH)
+    # Read public key from the file we saved
+    local pbk=$(sudo cat /etc/sing-box/reality.pub)
     local sid=$(jq -r '.inbounds[0].tls.reality.short_id' $CONFIG_PATH)
 
     VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"
@@ -200,7 +228,6 @@ check_service_status() {
 }
 
 # --- Main application loop ---
-# We run check_dependencies once at the start
 check_dependencies
 while true; do
     show_main_menu
@@ -209,9 +236,8 @@ while true; do
     # Case statement for main menu
     case $choice in
         1) update_server ;;
-        2) # For now, install_singbox is in the main menu. Later it might move.
-           echo "This option will be updated to 'Update Core' if already installed."
-           # install_singbox
+        2) # install_singbox # You can add update logic here later
+           echo "Install/Update functionality will be refined."
            sleep 2
            ;;
         3) service_management_menu ;;
@@ -219,3 +245,4 @@ while true; do
         *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2 ;;
     esac
 done
+
