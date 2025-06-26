@@ -130,4 +130,5 @@ Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, H
 (توجه: بعداً لینک اسکریپت نصب را با لینک واقعی خود جایگزین کن.)
 
 ```bash
-bash <(curl -sSL https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPO/main/install.sh)
+bash <(curl -sSL https://github.com/edwardium/EKray/raw/main/install.sh)
+
