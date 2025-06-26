@@ -19,13 +19,14 @@ Next-Gen Anti-Filter Panel for Ubuntu. Multi-user, based on sing-box (Reality, H
 ۱. یک سرور Ubuntu 20.04 یا 22.04 تهیه کنید (VPS، سرور ابری، یا حتی ماشین مجازی).
 
 ۲. ترمینال را باز کنید و دستور زیر را وارد کنید:
-```markdown
+
 > 🚦 **Quick Install:**
 > Copy & Paste in your terminal:
 
-```
+```bash
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
+```
 
 ---
 
