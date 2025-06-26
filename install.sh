@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 1.1.1 (Interactive Menu Hotfix)
+# Version: 1.1.2 (Main Loop & Exit Hotfix)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -20,6 +20,11 @@ PUB_KEY_PATH="/etc/sing-box/reality.pub"
 SINGBOX_BIN_PATH="/usr/local/bin/sing-box"
 SERVICE_PATH="/etc/systemd/system/sing-box.service"
 
+# --- Function to pause and wait for user input ---
+press_any_key() {
+    read -n 1 -s -r -p "Press any key to return to the menu..."
+}
+
 # --- Function to check for dependencies ---
 check_dependencies() {
     DEPS="curl jq qrencode"
@@ -35,7 +40,7 @@ check_dependencies() {
 show_main_menu() {
     clear
     echo "============================================="
-    echo "         EKray Management Panel v1.1.1       "
+    echo "         EKray Management Panel v1.1.2       "
     echo "             by Edward & Kaveh             "
     echo "============================================="
     echo "Please choose an option:"
@@ -78,112 +83,88 @@ service_management_menu() {
         read -p "Enter your choice [1-11]: " service_choice
 
         case $service_choice in
-            1) install_reality_service ;;
-            2) add_reality_user ;;
-            3) list_and_manage_users ;;
-            4) delete_all_reality_service ;;
-            5) sudo systemctl start sing-box; echo -e "\n${GREEN}Service start command sent.${NC}" ;;
-            6) sudo systemctl stop sing-box; echo -e "\n${GREEN}Service stop command sent.${NC}" ;;
-            7) sudo systemctl restart sing-box; echo -e "\n${GREEN}Service restart command sent.${NC}" ;;
-            8) check_service_status ;;
-            9) view_service_logs ;;
-            10) validate_config_file ;;
+            1) install_reality_service; press_any_key ;;
+            2) add_reality_user; press_any_key ;;
+            3) list_and_manage_users ;; # This function has its own loop and pause
+            4) delete_all_reality_service; press_any_key ;;
+            5) sudo systemctl start sing-box; echo -e "\n${GREEN}Service start command sent.${NC}"; press_any_key ;;
+            6) sudo systemctl stop sing-box; echo -e "\n${GREEN}Service stop command sent.${NC}"; press_any_key ;;
+            7) sudo systemctl restart sing-box; echo -e "\n${GREEN}Service restart command sent.${NC}"; press_any_key ;;
+            8) check_service_status; press_any_key ;;
+            9) view_service_logs; press_any_key ;;
+            10) validate_config_file; press_any_key ;;
             11) return ;;
             *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
         esac
-
-        # --- THIS IS THE FIX ---
-        # Don't show "Press any key" after returning from a sub-menu (like user management)
-        if [[ "$service_choice" -ne 11 && "$service_choice" -ne 3 ]]; then
-            read -n 1 -s -r -p "Press any key to return to the service menu..."
-        fi
     done
 }
 
 # --- Interactive User Management Flow ---
 list_and_manage_users() {
-    if [ ! -f "$USER_DB_PATH" ]; then
-        echo -e "${RED}No users found. Please add a user first.${NC}"; return
-    fi
+    # This function has its own loop and doesn't need an external pause
+    while true; do
+        if [ ! -f "$USER_DB_PATH" ]; then
+            echo -e "${RED}No users found. Please add a user first.${NC}"; sleep 2; return
+        fi
 
-    clear
-    echo -e "${YELLOW}--- List of Reality Users ---${NC}"
-    i=1
-    mapfile -t users < <(sudo cat "$USER_DB_PATH")
+        clear
+        echo -e "${YELLOW}--- List of Reality Users ---${NC}"
+        i=1
+        mapfile -t users < <(sudo cat "$USER_DB_PATH")
 
-    for user_line in "${users[@]}"; do
-        local name=$(echo "$user_line" | cut -d: -f1)
-        local uuid=$(echo "$user_line" | cut -d: -f2)
-        echo -e "  ${GREEN}${i})${NC} Name: ${YELLOW}${name}${NC}  (UUID: ${uuid:0:8}...)"
-        ((i++))
+        for user_line in "${users[@]}"; do
+            local name=$(echo "$user_line" | cut -d: -f1)
+            local uuid=$(echo "$user_line" | cut -d: -f2)
+            echo -e "  ${GREEN}${i})${NC} Name: ${YELLOW}${name}${NC}  (UUID: ${uuid:0:8}...)"
+            ((i++))
+        done
+        echo "---------------------------------"
+        read -p "Enter user number to manage (or 0 to go back): " user_number
+
+        if [[ "$user_number" == "0" ]]; then break; fi
+        if ! [[ "$user_number" =~ ^[0-9]+$ ]] || [ "$user_number" -gt "${#users[@]}" ]; then
+            echo -e "${RED}Invalid selection.${NC}"; sleep 2; continue
+        fi
+
+        local selected_user_line="${users[$((user_number-1))]}"
+        local user_name=$(echo "$selected_user_line" | cut -d: -f1)
+        local user_uuid=$(echo "$selected_user_line" | cut -d: -f2)
+
+        manage_single_user "$user_name" "$user_uuid"
     done
-    echo "---------------------------------"
-    read -p "Enter user number to manage (or 0 to go back): " user_number
-
-    if [[ "$user_number" -eq 0 ]]; then return; fi
-    if ! [[ "$user_number" =~ ^[0-9]+$ ]] || [ "$user_number" -gt "${#users[@]}" ]; then
-        echo -e "${RED}Invalid selection.${NC}"; sleep 2; return
-    fi
-
-    local selected_user_line="${users[$((user_number-1))]}"
-    local user_name=$(echo "$selected_user_line" | cut -d: -f1)
-    local user_uuid=$(echo "$selected_user_line" | cut -d: -f2)
-
-    manage_single_user "$user_name" "$user_uuid"
 }
+
 
 # --- Sub-menu for a single user ---
 manage_single_user() {
-    while true; do
-        clear
-        echo "============================================="
-        echo -e "  Managing User: ${YELLOW}${user_name}${NC}"
-        echo "============================================="
-        echo "  1) View User Config / QR Code"
-        echo "  2) Delete User"
-        echo "  3) Back to User List"
-        echo "---------------------------------------------"
-        read -p "Enter your choice [1-3]: " manage_choice
+    local user_name=$1
+    local user_uuid=$2
 
-        case $manage_choice in
-            1) generate_reality_link "$user_name" "$user_uuid" "no_clear" ;;
-            2)
-                delete_single_user "$user_name" "$user_uuid"
-                # After deletion, exit this menu as the user is gone
-                return
-                ;;
-            3) return ;;
-            *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
-        esac
-        read -n 1 -s -r -p "Press any key to return to the user menu..."
-    done
+    clear; echo "============================================="; echo -e "  Managing User: ${YELLOW}${user_name}${NC}"; echo "============================================="
+    echo "  1) View User Config / QR Code"; echo "  2) Delete User"; echo "  3) Back to User List"
+    echo "---------------------------------------------"; read -p "Enter your choice [1-3]: " manage_choice
+
+    case $manage_choice in
+        1) generate_reality_link "$user_name" "$user_uuid" "no_clear"; press_any_key ;;
+        2) delete_single_user "$user_name" "$user_uuid"; press_any_key; return ;; # Return after deletion
+        3) return ;;
+        *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
+    esac
 }
 
 # --- Function to delete a single user ---
 delete_single_user() {
-    local user_name=$1
-    local user_uuid=$2
-
-    echo -e "${RED}WARNING: You are about to delete user '${user_name}'. This cannot be undone.${NC}"
-    read -p "Are you sure? (y/n): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        echo -e "${YELLOW}Deletion cancelled.${NC}"; return
-    fi
-
-    echo "Removing user from sing-box config..."
-    tmp_json=$(mktemp)
+    local user_name=$1; local user_uuid=$2
+    echo -e "${RED}WARNING: You are about to delete user '${user_name}'.${NC}"; read -p "Are you sure? (y/n): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo -e "${YELLOW}Deletion cancelled.${NC}"; return; fi
+    echo "Removing user from sing-box config..."; tmp_json=$(mktemp)
     jq --arg uuid "$user_uuid" 'del(.inbounds[0].users[] | select(.uuid == $uuid))' "$CONFIG_PATH" > "$tmp_json"
     sudo mv "$tmp_json" "$CONFIG_PATH"
-
-    echo "Removing user from database..."
-    sudo sed -i "/${user_uuid}/d" "$USER_DB_PATH"
-
-    echo "Restarting service..."
-    sudo systemctl restart sing-box
-    sleep 2
-
+    echo "Removing user from database..."; sudo sed -i "/${user_uuid}/d" "$USER_DB_PATH"
+    echo "Restarting service..."; sudo systemctl restart sing-box; sleep 2
     echo -e "${GREEN}User '${user_name}' has been deleted successfully.${NC}"
 }
+
 
 # (The rest of the script is unchanged and included for completeness)
 generate_reality_link() { local user_name=$1; local uuid=$2; if [ "$3" != "no_clear" ]; then clear; fi; local server_ip=$(curl -s ip.me); local port=$(jq '.inbounds[0].listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[0].tls.server_name' $CONFIG_PATH); local pbk=$(sudo cat "$PUB_KEY_PATH"); local sid=$(jq -r '.inbounds[0].tls.reality.short_id' $CONFIG_PATH); VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"; echo "============================================="; echo -e "  Connection Info for User: ${YELLOW}${user_name}${NC}"; echo "============================================="; echo -e "${GREEN}Server IP:${NC}         ${server_ip}"; echo -e "${GREEN}Listen Port:${NC}       ${port}"; echo -e "${GREEN}User UUID:${NC}         ${uuid}"; echo -e "${GREEN}Server Name (SNI):${NC} ${sni}"; echo -e "${GREEN}Public Key:${NC}        ${pbk}"; echo -e "${GREEN}Short ID:${NC}          ${sid}"; echo "---------------------------------------------"; echo -e "${YELLOW}VLESS Link (for V2Ray, etc.):${NC}"; echo "$VLESS_LINK"; echo "---------------------------------------------"; echo -e "${YELLOW}QR Code (for mobile clients):${NC}"; qrencode -t UTF8 -m 1 "$VLESS_LINK"; echo "============================================="; }
@@ -209,16 +190,12 @@ while true; do
     read -p "Enter your choice [1-6]: " choice
 
     case $choice in
-        1) update_server ;;
-        2) install_singbox ;;
+        1) update_server; press_any_key ;;
+        2) install_singbox; press_any_key ;;
         3) service_management_menu ;;
-        4) system_status_check ;;
-        5) uninstall_ekray ;;
+        4) system_status_check; press_any_key ;;
+        5) uninstall_ekray; press_any_key ;;
         6) echo "Exiting the panel..."; exit 0 ;;
-        *) echo -e "${RED}Invalid option. Please try again.${NC}"; sleep 2 ;;
+        *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
     esac
-
-    if [[ "$choice" -ne 3 && "$choice" -ne 6 ]]; then
-        read -n 1 -s -r -p "Press any key to return to the main menu..."
-    fi
 done
