@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 1.1.0 (Interactive User Management)
+# Version: 1.1.1 (Interactive Menu Hotfix)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -35,7 +35,7 @@ check_dependencies() {
 show_main_menu() {
     clear
     echo "============================================="
-    echo "         EKray Management Panel v1.1.0       "
+    echo "         EKray Management Panel v1.1.1       "
     echo "             by Edward & Kaveh             "
     echo "============================================="
     echo "Please choose an option:"
@@ -50,7 +50,7 @@ show_main_menu() {
     echo "---------------------------------------------"
 }
 
-# --- Service Management Sub-menu (Reordered as requested) ---
+# --- Service Management Sub-menu ---
 service_management_menu() {
     while true; do
         clear
@@ -92,13 +92,15 @@ service_management_menu() {
             *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
         esac
 
-        if [[ "$service_choice" -ne 11 ]]; then
+        # --- THIS IS THE FIX ---
+        # Don't show "Press any key" after returning from a sub-menu (like user management)
+        if [[ "$service_choice" -ne 11 && "$service_choice" -ne 3 ]]; then
             read -n 1 -s -r -p "Press any key to return to the service menu..."
         fi
     done
 }
 
-# --- New: Interactive User Management Flow ---
+# --- Interactive User Management Flow ---
 list_and_manage_users() {
     if [ ! -f "$USER_DB_PATH" ]; then
         echo -e "${RED}No users found. Please add a user first.${NC}"; return
@@ -107,7 +109,6 @@ list_and_manage_users() {
     clear
     echo -e "${YELLOW}--- List of Reality Users ---${NC}"
     i=1
-    # Store users in an array for easy access
     mapfile -t users < <(sudo cat "$USER_DB_PATH")
 
     for user_line in "${users[@]}"; do
@@ -131,30 +132,34 @@ list_and_manage_users() {
     manage_single_user "$user_name" "$user_uuid"
 }
 
-# --- New: Sub-menu for a single user ---
+# --- Sub-menu for a single user ---
 manage_single_user() {
-    local user_name=$1
-    local user_uuid=$2
+    while true; do
+        clear
+        echo "============================================="
+        echo -e "  Managing User: ${YELLOW}${user_name}${NC}"
+        echo "============================================="
+        echo "  1) View User Config / QR Code"
+        echo "  2) Delete User"
+        echo "  3) Back to User List"
+        echo "---------------------------------------------"
+        read -p "Enter your choice [1-3]: " manage_choice
 
-    clear
-    echo "============================================="
-    echo -e "  Managing User: ${YELLOW}${user_name}${NC}"
-    echo "============================================="
-    echo "  1) View User Config / QR Code"
-    echo "  2) Delete User"
-    echo "  3) Back"
-    echo "---------------------------------------------"
-    read -p "Enter your choice [1-3]: " manage_choice
-
-    case $manage_choice in
-        1) generate_reality_link "$user_name" "$user_uuid" "no_clear" ;;
-        2) delete_single_user "$user_name" "$user_uuid" ;;
-        3) return ;;
-        *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
-    esac
+        case $manage_choice in
+            1) generate_reality_link "$user_name" "$user_uuid" "no_clear" ;;
+            2)
+                delete_single_user "$user_name" "$user_uuid"
+                # After deletion, exit this menu as the user is gone
+                return
+                ;;
+            3) return ;;
+            *) echo -e "${RED}Invalid option.${NC}"; sleep 2 ;;
+        esac
+        read -n 1 -s -r -p "Press any key to return to the user menu..."
+    done
 }
 
-# --- New: Function to delete a single user ---
+# --- Function to delete a single user ---
 delete_single_user() {
     local user_name=$1
     local user_uuid=$2
@@ -165,13 +170,11 @@ delete_single_user() {
         echo -e "${YELLOW}Deletion cancelled.${NC}"; return
     fi
 
-    # Delete from config.json
     echo "Removing user from sing-box config..."
     tmp_json=$(mktemp)
     jq --arg uuid "$user_uuid" 'del(.inbounds[0].users[] | select(.uuid == $uuid))' "$CONFIG_PATH" > "$tmp_json"
     sudo mv "$tmp_json" "$CONFIG_PATH"
 
-    # Delete from users.db
     echo "Removing user from database..."
     sudo sed -i "/${user_uuid}/d" "$USER_DB_PATH"
 
@@ -182,24 +185,8 @@ delete_single_user() {
     echo -e "${GREEN}User '${user_name}' has been deleted successfully.${NC}"
 }
 
-
-# --- Function to generate and display Reality link with full details ---
-generate_reality_link() {
-    local user_name=$1
-    local uuid=$2
-
-    if [ "$3" != "no_clear" ]; then clear; fi
-
-    local server_ip=$(curl -s ip.me); local port=$(jq '.inbounds[0].listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[0].tls.server_name' $CONFIG_PATH); local pbk=$(sudo cat "$PUB_KEY_PATH"); local sid=$(jq -r '.inbounds[0].tls.reality.short_id' $CONFIG_PATH);
-    VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"
-
-    echo "============================================="; echo -e "  Connection Info for User: ${YELLOW}${user_name}${NC}"; echo "============================================="
-    echo -e "${GREEN}Server IP:${NC}         ${server_ip}"; echo -e "${GREEN}Listen Port:${NC}       ${port}"; echo -e "${GREEN}User UUID:${NC}         ${uuid}"; echo -e "${GREEN}Server Name (SNI):${NC} ${sni}"; echo -e "${GREEN}Public Key:${NC}        ${pbk}"; echo -e "${GREEN}Short ID:${NC}          ${sid}";
-    echo "---------------------------------------------"; echo -e "${YELLOW}VLESS Link (for V2Ray, etc.):${NC}"; echo "$VLESS_LINK";
-    echo "---------------------------------------------"; echo -e "${YELLOW}QR Code (for mobile clients):${NC}"; qrencode -t UTF8 -m 1 "$VLESS_LINK"; echo "============================================="
-}
-
 # (The rest of the script is unchanged and included for completeness)
+generate_reality_link() { local user_name=$1; local uuid=$2; if [ "$3" != "no_clear" ]; then clear; fi; local server_ip=$(curl -s ip.me); local port=$(jq '.inbounds[0].listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[0].tls.server_name' $CONFIG_PATH); local pbk=$(sudo cat "$PUB_KEY_PATH"); local sid=$(jq -r '.inbounds[0].tls.reality.short_id' $CONFIG_PATH); VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"; echo "============================================="; echo -e "  Connection Info for User: ${YELLOW}${user_name}${NC}"; echo "============================================="; echo -e "${GREEN}Server IP:${NC}         ${server_ip}"; echo -e "${GREEN}Listen Port:${NC}       ${port}"; echo -e "${GREEN}User UUID:${NC}         ${uuid}"; echo -e "${GREEN}Server Name (SNI):${NC} ${sni}"; echo -e "${GREEN}Public Key:${NC}        ${pbk}"; echo -e "${GREEN}Short ID:${NC}          ${sid}"; echo "---------------------------------------------"; echo -e "${YELLOW}VLESS Link (for V2Ray, etc.):${NC}"; echo "$VLESS_LINK"; echo "---------------------------------------------"; echo -e "${YELLOW}QR Code (for mobile clients):${NC}"; qrencode -t UTF8 -m 1 "$VLESS_LINK"; echo "============================================="; }
 install_singbox() { if command -v sing-box &> /dev/null; then echo -e "${GREEN}sing-box is already installed.${NC}"; return; fi; echo -e "${YELLOW}Installing sing-box...${NC}"; local ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; *) echo -e "${RED}Unsupported architecture${NC}"; return 1 ;; esac; local LATEST_VERSION=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name'); if [ -z "$LATEST_VERSION" ]; then echo -e "${RED}Error getting latest version.${NC}"; return 1; fi; echo "Latest version: $LATEST_VERSION"; local DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-${ARCH}.tar.gz"; echo "Downloading..."; curl -sLo sing-box.tar.gz "$DOWNLOAD_URL"; if [ $? -ne 0 ]; then echo -e "${RED}Download failed.${NC}"; return 1; fi; local EXTRACT_DIR="sing-box-${LATEST_VERSION#v}-linux-${ARCH}"; tar -xzf sing-box.tar.gz; sudo install -m 755 "${EXTRACT_DIR}/sing-box" "$SINGBOX_BIN_PATH"; sudo mkdir -p /etc/sing-box/; rm -rf "${EXTRACT_DIR}" sing-box.tar.gz; if [ ! -f "$SERVICE_PATH" ]; then create_service_file; fi; echo -e "${GREEN}sing-box core installed.${NC}"; }
 create_service_file() { echo -e "${YELLOW}Creating systemd service file...${NC}"; SERVICE_FILE_CONTENT="[Unit]\nDescription=sing-box service\nAfter=network.target\n\n[Service]\nUser=root\nWorkingDirectory=/etc/sing-box\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nExecStart=${SINGBOX_BIN_PATH} run -c ${CONFIG_PATH}\nRestart=on-failure\nRestartSec=10\nLimitNOFILE=infinity\n\n[Install]\nWantedBy=multi-user.target"; echo -e "$SERVICE_FILE_CONTENT" | sudo tee "$SERVICE_PATH" > /dev/null; sudo systemctl daemon-reload; sudo systemctl enable sing-box; echo -e "${GREEN}Service file created.${NC}"; }
 update_server() { echo -e "${YELLOW}Updating server...${NC}"; sudo apt-get update && sudo apt-get upgrade -y; echo -e "${GREEN}Server updated.${NC}"; }
