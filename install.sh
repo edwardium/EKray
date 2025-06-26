@@ -2,8 +2,8 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 0.6 (International & Robust)
-# Author: Edward & Kaveh
+# Version: 0.6.1 (UI Enhancement)
+# Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
 
@@ -123,7 +123,9 @@ WantedBy=multi-user.target"
 show_main_menu() {
     clear
     echo "============================================="
-    echo "          EKray Management Panel v0.6        "
+    echo "         EKray Management Panel v0.6.1       "
+    # --- خط جدید اضافه شده ---
+    echo "             by Edward & Kaveh             "
     echo "============================================="
     echo "Please choose an option:"
     echo ""
