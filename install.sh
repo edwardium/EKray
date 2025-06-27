@@ -89,7 +89,7 @@ install_reality_service() {
     echo "Generating Reality key pair..."; REALITY_KEYS=$($SINGBOX_BIN_PATH generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",'); RANDOM_SHORT_ID=$(openssl rand -hex 8)
     REALITY_INBOUND=$(jq -n --argjson port "$listen_port" --arg sni "$server_name" --arg p_key "$PRIVATE_KEY" --arg s_id "$RANDOM_SHORT_ID" '{ "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": $port, "users": [], "tls": { "enabled": true, "server_name": $sni, "reality": { "enabled": true, "handshake": { "server": $sni, "server_port": 443 }, "private_key": $p_key, "short_id": $s_id } } }'); tmp_json=$(mktemp); jq --argjson new_inbound "$REALITY_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"; echo "$PUBLIC_KEY" | sudo tee "$PUB_KEY_PATH" > /dev/null
     echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
-    echo -e "\n${C_YELLOW}No users found for Reality. Please use 'Manage Existing Users' to add a user.${C_RESET}"
+    echo -e "\n${C_YELLOW}No users created for Reality yet. Please use 'User Management' to add a user.${C_RESET}"
 }
 
 install_hysteria2_service() {
@@ -104,7 +104,6 @@ add_reality_user() {
     jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
     echo "${user_name}:${new_uuid}" | sudo tee -a "$USER_DB_PATH" > /dev/null; sudo systemctl restart sing-box; sleep 1
     echo -e "\n${C_B_GREEN}User '${user_name}' added successfully!${C_RESET}"
-    # --- THIS IS THE FIX: CALLING THE LINK GENERATION FUNCTION ---
     generate_reality_link "$user_name" "$new_uuid"
 }
 
@@ -177,15 +176,14 @@ install_protocol_menu() {
     while true; do
         clear; print_header "➕ Install New Protocol"
         echo -e "  ${C_GREEN}1)${C_RESET} ⚡ VLESS + Reality"
-        echo -e "  ${C_GREEN}2)${C_RESET} 🌪️ Hysteria2 (Coming Soon)"
-        echo -e "  ${C_MAGENTA}3)${C_RESET} 🛡️ Trojan (Coming Soon)"
-        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
+        echo -e "  ${C_MAGENTA}2)${C_RESET} 🌪️ Hysteria2 (Coming Soon)"
+        echo -e "  ${C_YELLOW}3)${C_RESET} ↩️ Back"
         echo "-----------------------------------------------"
-        read -p "Choose a protocol to install: " choice
+        read -p "Choose a protocol to install [1-3]: " choice
         case $choice in
             1) install_reality_service; press_any_key ;;
             2) install_hysteria2_service; press_any_key ;;
-            4) return ;;
+            3) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
         esac
     done
@@ -216,25 +214,21 @@ service_control_menu() {
         echo -e "  ${C_GREEN}1)${C_RESET} ▶️ Start sing-box Service"
         echo -e "  ${C_RED}2)${C_RESET} ⏹️ Stop sing-box Service"
         echo -e "  ${C_YELLOW}3)${C_RESET} 🔄 Restart sing-box Service"
-        echo -e "  ${C_GREEN}4)${C_RESET} 🔒 Enable Service on Boot"
-        echo -e "  ${C_RED}5)${C_RESET} 🔓 Disable Service on Boot"
         echo "-----------------------------------------------"
-        echo -e "  ${C_CYAN}6)${C_RESET} 🩺 System Status Check"
-        echo -e "  ${C_CYAN}7)${C_RESET} 📜 View Service Logs"
-        echo -e "  ${C_CYAN}8)${C_RESET} ✅ Validate Config File"
+        echo -e "  ${C_CYAN}4)${C_RESET} 🩺 System Status Check"
+        echo -e "  ${C_CYAN}5)${C_RESET} 📜 View Service Logs"
+        echo -e "  ${C_CYAN}6)${C_RESET} ✅ Validate Config File"
         echo "-----------------------------------------------"
-        echo -e "  ${C_YELLOW}9)${C_RESET} ↩️ Back"
-        read -p "Enter your choice [1-9]: " choice
+        echo -e "  ${C_YELLOW}7)${C_RESET} ↩️ Back"
+        read -p "Enter your choice [1-7]: " choice
         case $choice in
             1) sudo systemctl start sing-box; echo -e "\n${C_GREEN}Start command sent.${C_RESET}"; press_any_key ;;
             2) sudo systemctl stop sing-box; echo -e "\n${C_GREEN}Stop command sent.${C_RESET}"; press_any_key ;;
             3) sudo systemctl restart sing-box; echo -e "\n${C_GREEN}Restart command sent.${C_RESET}"; press_any_key ;;
-            4) sudo systemctl enable sing-box &> /dev/null; echo -e "\n${C_GREEN}Autostart enabled.${C_RESET}"; press_any_key ;;
-            5) sudo systemctl disable sing-box &> /dev/null; echo -e "\n${C_GREEN}Autostart disabled.${C_RESET}"; press_any_key ;;
-            6) system_status_check; press_any_key ;;
-            7) view_service_logs; press_any_key ;;
-            8) validate_config_file; press_any_key ;;
-            9) return ;;
+            4) system_status_check; press_any_key ;;
+            5) view_service_logs; press_any_key ;;
+            6) validate_config_file; press_any_key ;;
+            7) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
         esac
     done
@@ -262,7 +256,7 @@ installation_menu() {
 # --- Main Entrypoint ---
 main_menu() {
     while true; do
-        clear; print_header "🚀 EKray Panel v2.0.1 🚀"
+        clear; print_header "🚀 EKray Panel v2.0.2 🚀"
         echo -e "   ${C_CYAN}by Edward & Kaveh${C_RESET}"
         echo ""; echo -e "  ${C_YELLOW}1)${C_RESET} 📦 Installation & Core Management"
         echo -e "  ${C_YELLOW}2)${C_RESET} 👥 Protocol & User Management"
