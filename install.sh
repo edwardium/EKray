@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 1.9.5 (Stable Release & Full Functionality)
+# Version: 1.9.5 (Full Function Restore & Hotfix)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -43,7 +43,7 @@ check_dependencies() { DEPS="curl jq qrencode openssl"; for dep in $DEPS; do if 
 main_menu() {
     while true; do
         clear
-        print_header "🚀 EKray Panel v2.0.0 🚀"
+        print_header "🚀 EKray Panel v1.9.5 🚀"
         echo -e "   ${C_CYAN}by Edward & Kaveh${C_RESET}"
         echo ""
         echo -e "  ${C_YELLOW}1)${C_RESET} 📦 Installation & Core Management"
@@ -137,12 +137,12 @@ service_control_menu() {
 
 
 #=================================================
-# ALL FUNCTION IMPLEMENTATIONS ARE NOW FULLY RESTORED
+# ALL FUNCTION IMPLEMENTATIONS ARE NOW RESTORED
 #=================================================
 
 initialize_config_if_needed() {
     if [ ! -f "$CONFIG_PATH" ]; then
-        echo -e "${C_YELLOW}Initializing new config file...${C_RESET}"
+        echo -e "\n${C_YELLOW}Initializing new config file...${C_RESET}"
         sudo bash -c "cat > $CONFIG_PATH" << EOF
 { "log": { "level": "info", "timestamp": true }, "inbounds": [], "outbounds": [ { "type": "direct", "tag": "direct" }, { "type": "block", "tag": "block" } ] }
 EOF
@@ -151,7 +151,7 @@ EOF
     return 0
 }
 
-update_server() { echo -e "\n${C_YELLOW}Updating server... This may take a while.${C_RESET}"; if sudo apt-get update && sudo apt-get upgrade -y; then echo -e "${C_B_GREEN}Server updated successfully!${C_RESET}"; else echo -e "${C_RED}An error occurred during the update.${C_RESET}"; fi; }
+update_server() { echo -e "\n${C_YELLOW}Updating server...${C_RESET}"; if sudo apt-get update && sudo apt-get upgrade -y; then echo -e "${C_B_GREEN}Server updated successfully!${C_RESET}"; else echo -e "${C_RED}An error occurred.${C_RESET}"; fi; }
 
 install_singbox() {
     if command -v sing-box &> /dev/null; then echo -e "\n${C_GREEN}sing-box is already installed.${C_RESET}"; return; fi
@@ -177,11 +177,11 @@ system_status_check() {
     echo "---------------------------"
 }
 
-uninstall_ekray() { echo -e "\n${C_RED}WARNING: This will REMOVE ALL EKray files (core, service, configs).${C_RESET}"; read -p "Are you sure? (y/n): " confirm; if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then sudo systemctl stop sing-box &> /dev/null; sudo systemctl disable sing-box &> /dev/null; sudo rm -f "$SERVICE_PATH"; sudo rm -f "$SINGBOX_BIN_PATH"; sudo rm -rf "/etc/sing-box/"; sudo systemctl daemon-reload; echo -e "\n${C_B_GREEN}EKray and sing-box core have been completely uninstalled.${C_RESET}"; else echo -e "\n${C_YELLOW}Uninstall cancelled.${C_RESET}"; fi; }
+uninstall_ekray() { echo -e "\n${C_RED}WARNING: This will REMOVE ALL EKray files.${C_RESET}"; read -p "Are you sure? (y/n): " confirm; if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then sudo systemctl stop sing-box &> /dev/null; sudo systemctl disable sing-box &> /dev/null; sudo rm -f "$SERVICE_PATH"; sudo rm -f "$SINGBOX_BIN_PATH"; sudo rm -rf "/etc/sing-box/"; sudo systemctl daemon-reload; echo -e "\n${C_B_GREEN}EKray and sing-box core have been completely uninstalled.${C_RESET}"; else echo -e "\n${C_YELLOW}Uninstall cancelled.${C_RESET}"; fi; }
 
 delete_all_service_configs() {
     if [ ! -f "$CONFIG_PATH" ]; then echo -e "\n${C_YELLOW}No service configuration found to delete.${C_RESET}"; return; fi
-    echo -e "\n${C_RED}WARNING: This will stop the service and delete ALL protocol configurations and users.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
+    echo -e "\n${C_RED}WARNING: This will delete ALL protocol configurations and users.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         sudo systemctl stop sing-box
         sudo rm -f "$CONFIG_PATH" "$USER_DB_PATH" "$PUB_KEY_PATH" &> /dev/null
@@ -216,7 +216,7 @@ install_reality_service() {
     echo -e "\n${C_YELLOW}Installing VLESS+Reality Service...${C_RESET}"; read -p "Enter listen port (default: 443): " listen_port; listen_port=${listen_port:-443}; read -p "Enter SNI domain (default: www.microsoft.com): " server_name; server_name=${server_name:-www.microsoft.com}
     echo "Generating Reality key pair..."; REALITY_KEYS=$($SINGBOX_BIN_PATH generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",'); RANDOM_SHORT_ID=$(openssl rand -hex 8)
     REALITY_INBOUND=$(jq -n --argjson port "$listen_port" --arg sni "$server_name" --arg p_key "$PRIVATE_KEY" --arg s_id "$RANDOM_SHORT_ID" '{ "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": $port, "users": [], "tls": { "enabled": true, "server_name": $sni, "reality": { "enabled": true, "handshake": { "server": $sni, "server_port": 443 }, "private_key": $p_key, "short_id": $s_id } } }'); tmp_json=$(mktemp); jq --argjson new_inbound "$REALITY_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"; echo "$PUBLIC_KEY" | sudo tee "$PUB_KEY_PATH" > /dev/null
-    echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; check_service_status
+    echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
 }
 
 install_hysteria2_service() {
@@ -224,14 +224,13 @@ install_hysteria2_service() {
     if jq -e '.inbounds[] | select(.tag == "hysteria2-in")' "$CONFIG_PATH" > /dev/null; then echo -e "\n${C_RED}Hysteria2 service is already installed.${C_RESET}"; return; fi
     echo -e "\n${C_YELLOW}Installing Hysteria2 Service...${C_RESET}"; read -p "Enter listen port (e.g., 34567): " listen_port; read -p "Enter a strong password for Hysteria2: " hy2_password
     HYSTERIA2_INBOUND=$(jq -n --argjson port "$listen_port" --arg pass "$hy2_password" '{ "type": "hysteria2", "tag": "hysteria2-in", "listen": "::", "listen_port": $port, "users": [ { "password": $pass } ], "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/sing-box/self-signed.crt", "key_path": "/etc/sing-box/self-signed.key" } }');
-    if [ ! -f "/etc/sing-box/self-signed.crt" ]; then echo "Generating self-signed certificate for Hysteria2..."; sudo openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout /etc/sing-box/self-signed.key -out /etc/sing-box/self-signed.crt -subj "/CN=localhost" -days 3650 &> /dev/null; fi
+    if [ ! -f "/etc/sing-box/self-signed.crt" ]; then echo "Generating self-signed certificate..."; sudo openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout /etc/sing-box/self-signed.key -out /etc/sing-box/self-signed.crt -subj "/CN=localhost" -days 3650 &> /dev/null; fi
     tmp_json=$(mktemp); jq --argjson new_inbound "$HYSTERIA2_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
-    echo -e "\n${C_GREEN}Hysteria2 inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; check_service_status
+    echo -e "\n${C_GREEN}Hysteria2 inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
 }
 
-# --- This function needs to be built next ---
-list_and_manage_users(){ echo -e "\n${C_MAGENTA}User management is the next major feature to be implemented.${C_RESET}"; press_any_key; }
-
+# This will be the next major development focus
+list_and_manage_users(){ echo -e "\n${C_MAGENTA}User management is the next major feature to be implemented.${C_RESET}"; }
 view_service_logs() { echo -e "\n${C_YELLOW}Showing last 50 lines of sing-box logs...${C_RESET}"; sudo journalctl -u sing-box -n 50 --no-pager; }
 validate_config_file() { if [ ! -f "$CONFIG_PATH" ]; then echo -e "\n${C_RED}No config file found to validate.${C_RESET}"; return; fi; echo -e "\n${C_YELLOW}Validating config...${C_RESET}"; sudo "$SINGBOX_BIN_PATH" check -c "$CONFIG_PATH"; }
 
