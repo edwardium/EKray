@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 2.0.0 (The Phoenix Release - Stable & Fully Featured)
+# Version: 2.0.1 (The Final Stable & Featured Release)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -89,6 +89,7 @@ install_reality_service() {
     echo "Generating Reality key pair..."; REALITY_KEYS=$($SINGBOX_BIN_PATH generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",'); RANDOM_SHORT_ID=$(openssl rand -hex 8)
     REALITY_INBOUND=$(jq -n --argjson port "$listen_port" --arg sni "$server_name" --arg p_key "$PRIVATE_KEY" --arg s_id "$RANDOM_SHORT_ID" '{ "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": $port, "users": [], "tls": { "enabled": true, "server_name": $sni, "reality": { "enabled": true, "handshake": { "server": $sni, "server_port": 443 }, "private_key": $p_key, "short_id": $s_id } } }'); tmp_json=$(mktemp); jq --argjson new_inbound "$REALITY_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"; echo "$PUBLIC_KEY" | sudo tee "$PUB_KEY_PATH" > /dev/null
     echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
+    echo -e "\n${C_YELLOW}No users found for Reality. Please add a user to generate a connection link.${C_RESET}"
 }
 
 install_hysteria2_service() {
@@ -104,7 +105,8 @@ install_hysteria2_service() {
 add_reality_user() {
     if ! jq -e '.inbounds[] | select(.tag == "vless-reality-in")' "$CONFIG_PATH" > /dev/null; then echo -e "\n${C_RED}Reality service not installed. Please install it first.${C_RESET}"; return; fi
     read -p "Enter a name for the new user: " user_name; if [ -z "$user_name" ]; then echo -e "${C_RED}User name cannot be empty.${C_RESET}"; return; fi
-    new_uuid=$($SINGBOX_BIN_PATH generate uuid); tmp_json=$(mktemp); jq --arg uuid "$new_uuid" '.inbounds[] | select(.tag == "vless-reality-in") | .users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
+    new_uuid=$($SINGBOX_BIN_PATH generate uuid); tmp_json=$(mktemp)
+    jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
     echo "${user_name}:${new_uuid}" | sudo tee -a "$USER_DB_PATH" > /dev/null; sudo systemctl restart sing-box; sleep 1
     echo -e "\n${C_B_GREEN}User '${user_name}' added successfully!${C_RESET}"
     generate_reality_link "$user_name" "$new_uuid"
@@ -114,7 +116,7 @@ delete_single_user() {
     local user_name=$1; local user_uuid=$2
     echo -e "\n${C_RED}WARNING: You are about to delete user '${user_name}'.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo -e "\n${C_YELLOW}Deletion cancelled.${C_RESET}"; return; fi
-    echo "Removing user from sing-box config..."; tmp_json=$(mktemp)
+    echo "Removing user from config..."; tmp_json=$(mktemp)
     jq --arg uuid "$user_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users |= del(.[] | select(.uuid == $uuid))' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
     echo "Removing user from database..."; sudo sed -i "/${user_uuid}/d" "$USER_DB_PATH"
     echo "Restarting service..."; sudo systemctl restart sing-box; sleep 1
@@ -124,7 +126,7 @@ delete_single_user() {
 generate_reality_link() {
     local user_name=$1; local uuid=$2;
     if [ "$3" != "no_clear" ]; then clear; fi
-    local server_ip=$(curl -4s ip.me); local port=$(jq '.inbounds[] | select(.tag == "vless-reality-in") | .listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[] | select(.tag == "vless-reality-in") | .tls.server_name' $CONFIG_PATH)
+    local server_ip=$(curl -4s https://ip.me); local port=$(jq '.inbounds[] | select(.tag == "vless-reality-in") | .listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[] | select(.tag == "vless-reality-in") | .tls.server_name' $CONFIG_PATH)
     local pbk=$(sudo cat "$PUB_KEY_PATH"); local sid=$(jq -r '.inbounds[] | select(.tag == "vless-reality-in") | .tls.reality.short_id' $CONFIG_PATH)
     VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"
 
@@ -170,6 +172,120 @@ manage_single_user() {
 
 view_service_logs() { echo -e "\n${C_YELLOW}Showing last 50 lines of sing-box logs...${C_RESET}"; sudo journalctl -u sing-box -n 50 --no-pager; }
 validate_config_file() { if [ ! -f "$CONFIG_PATH" ]; then echo -e "\n${C_RED}No config file found to validate.${C_RESET}"; return; fi; echo -e "\n${C_YELLOW}Validating config...${C_RESET}"; sudo "$SINGBOX_BIN_PATH" check -c "$CONFIG_PATH"; }
+
+#=================================================
+# MENU FUNCTION DEFINITIONS (CALL THE LOGIC)
+#=================================================
+
+install_protocol_menu() {
+    while true; do
+        clear; print_header "➕ Install New Protocol"
+        echo -e "  ${C_GREEN}1)${C_RESET} ⚡ VLESS + Reality"
+        echo -e "  ${C_GREEN}2)${C_RESET} 🌪️ Hysteria2"
+        echo -e "  ${C_MAGENTA}3)${C_RESET} 🛡️ Trojan (Coming Soon)"
+        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
+        echo "-----------------------------------------------"
+        read -p "Choose a protocol to install: " choice
+        case $choice in
+            1) install_reality_service; press_any_key ;;
+            2) install_hysteria2_service; press_any_key ;;
+            4) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+service_control_menu() {
+    while true; do
+        clear; print_header "⚙️ Service & System Control"
+        echo -e "  ${C_GREEN}1)${C_RESET} ▶️ Start sing-box Service"
+        echo -e "  ${C_RED}2)${C_RESET} ⏹️ Stop sing-box Service"
+        echo -e "  ${C_YELLOW}3)${C_RESET} 🔄 Restart sing-box Service"
+        echo -e "  ${C_GREEN}4)${C_RESET} 🔒 Enable Service on Boot"
+        echo -e "  ${C_RED}5)${C_RESET} 🔓 Disable Service on Boot"
+        echo "-----------------------------------------------"
+        echo -e "  ${C_CYAN}6)${C_RESET} 🩺 System Status Check"
+        echo -e "  ${C_CYAN}7)${C_RESET} 📜 View Service Logs"
+        echo -e "  ${C_CYAN}8)${C_RESET} ✅ Validate Config File"
+        echo "-----------------------------------------------"
+        echo -e "  ${C_YELLOW}9)${C_RESET} ↩️ Back"
+        read -p "Enter your choice [1-9]: " choice
+        case $choice in
+            1) sudo systemctl start sing-box; echo -e "\n${C_GREEN}Start command sent.${C_RESET}"; press_any_key ;;
+            2) sudo systemctl stop sing-box; echo -e "\n${C_GREEN}Stop command sent.${C_RESET}"; press_any_key ;;
+            3) sudo systemctl restart sing-box; echo -e "\n${C_GREEN}Restart command sent.${C_RESET}"; press_any_key ;;
+            4) sudo systemctl enable sing-box &> /dev/null; echo -e "\n${C_GREEN}Autostart enabled.${C_RESET}"; press_any_key ;;
+            5) sudo systemctl disable sing-box &> /dev/null; echo -e "\n${C_GREEN}Autostart disabled.${C_RESET}"; press_any_key ;;
+            6) system_status_check; press_any_key ;;
+            7) view_service_logs; press_any_key ;;
+            8) validate_config_file; press_any_key ;;
+            9) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+protocol_user_menu() {
+     while true; do
+        clear; print_header "👥 Protocol & User Management"
+        echo -e "  ${C_GREEN}1)${C_RESET} ➕ Install New Protocol"
+        echo -e "  ${C_GREEN}2)${C_RESET} 📇 Manage Existing Users"
+        echo -e "  ${C_RED}3)${C_RESET} 🔥 Delete All Protocols & Users"
+        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
+        echo "-----------------------------------------------"
+        read -p "Enter your choice [1-4]: " choice
+        case $choice in
+            1) install_protocol_menu ;;
+            2) list_and_manage_users ;;
+            3) delete_all_service_configs; press_any_key ;;
+            4) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+installation_menu() {
+    while true; do
+        clear; print_header "📦 Installation & Core"
+        echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Update Server & Dependencies"
+        echo -e "  ${C_GREEN}2)${C_RESET} 📥 Install sing-box Core"
+        echo -e "  ${C_RED}3)${C_RESET} 🗑️ Uninstall EKray & Core"
+        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
+        echo "-----------------------------------------------"
+        read -p "Enter your choice [1-4]: " choice
+        case $choice in
+            1) update_server; press_any_key ;;
+            2) install_singbox; press_any_key ;;
+            3) uninstall_ekray; press_any_key ;;
+            4) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+# --- Main Entrypoint ---
+main_menu() {
+    while true; do
+        clear; print_header "🚀 EKray Panel v2.0.1 🚀"
+        echo -e "   ${C_CYAN}by Edward & Kaveh${C_RESET}"
+        echo ""; echo -e "  ${C_YELLOW}1)${C_RESET} 📦 Installation & Core Management"
+        echo -e "  ${C_YELLOW}2)${C_RESET} 👥 Protocol & User Management"
+        echo -e "  ${C_YELLOW}3)${C_RESET} ⚙️  Service & System Control"
+        echo -e "  ${C_YELLOW}4)${C_RESET} 🛠️  Advanced Tools ${C_MAGENTA}(Coming Soon)${C_RESET}"
+        echo -e "  ${C_RED}5)${C_RESET} 🚪 Exit"
+        echo "-----------------------------------------------"
+        read -p "Enter your choice [1-5]: " choice
+        case $choice in
+            1) installation_menu ;;
+            2) protocol_user_menu ;;
+            3) service_control_menu ;;
+            4) echo -e "\n${C_MAGENTA}Advanced tools will be added later.${C_RESET}"; press_any_key ;;
+            5) echo -e "\n${C_BLUE}Goodbye!${C_RESET}"; exit 0 ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
 
 #=================================================
 # SCRIPT EXECUTION STARTS HERE
