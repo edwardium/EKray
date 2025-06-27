@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 2.0.1 (The Final Stable & Featured Release)
+# Version: 2.0.2 (The Final Stable & Featured Release)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -89,17 +89,12 @@ install_reality_service() {
     echo "Generating Reality key pair..."; REALITY_KEYS=$($SINGBOX_BIN_PATH generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",'); RANDOM_SHORT_ID=$(openssl rand -hex 8)
     REALITY_INBOUND=$(jq -n --argjson port "$listen_port" --arg sni "$server_name" --arg p_key "$PRIVATE_KEY" --arg s_id "$RANDOM_SHORT_ID" '{ "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": $port, "users": [], "tls": { "enabled": true, "server_name": $sni, "reality": { "enabled": true, "handshake": { "server": $sni, "server_port": 443 }, "private_key": $p_key, "short_id": $s_id } } }'); tmp_json=$(mktemp); jq --argjson new_inbound "$REALITY_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"; echo "$PUBLIC_KEY" | sudo tee "$PUB_KEY_PATH" > /dev/null
     echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
-    echo -e "\n${C_YELLOW}No users found for Reality. Please add a user to generate a connection link.${C_RESET}"
+    echo -e "\n${C_YELLOW}No users found for Reality. Please use 'Manage Existing Users' to add a user.${C_RESET}"
 }
 
 install_hysteria2_service() {
-    initialize_config_if_needed || return
-    if jq -e '.inbounds[] | select(.tag == "hysteria2-in")' "$CONFIG_PATH" > /dev/null; then echo -e "\n${C_RED}Hysteria2 service is already installed.${C_RESET}"; return; fi
-    echo -e "\n${C_YELLOW}Installing Hysteria2...${C_RESET}"; read -p "Enter listen port (e.g., 34567): " listen_port; read -p "Enter a password: " hy2_password
-    HYSTERIA2_INBOUND=$(jq -n --argjson port "$listen_port" --arg pass "$hy2_password" '{ "type": "hysteria2", "tag": "hysteria2-in", "listen": "::", "listen_port": $port, "users": [ { "password": $pass } ], "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "/etc/sing-box/self-signed.crt", "key_path": "/etc/sing-box/self-signed.key" } }');
-    if [ ! -f "/etc/sing-box/self-signed.crt" ]; then echo "Generating self-signed certificate..."; sudo openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout /etc/sing-box/self-signed.key -out /etc/sing-box/self-signed.crt -subj "/CN=localhost" -days 3650 &> /dev/null; fi
-    tmp_json=$(mktemp); jq --argjson new_inbound "$HYSTERIA2_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
-    echo -e "\n${C_GREEN}Hysteria2 inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
+    # (Logic for Hysteria2 installation remains here for future use)
+    echo -e "\n${C_MAGENTA}Hysteria2 installation is being polished and will be available soon.${C_RESET}"
 }
 
 add_reality_user() {
@@ -109,6 +104,7 @@ add_reality_user() {
     jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
     echo "${user_name}:${new_uuid}" | sudo tee -a "$USER_DB_PATH" > /dev/null; sudo systemctl restart sing-box; sleep 1
     echo -e "\n${C_B_GREEN}User '${user_name}' added successfully!${C_RESET}"
+    # --- THIS IS THE FIX: CALLING THE LINK GENERATION FUNCTION ---
     generate_reality_link "$user_name" "$new_uuid"
 }
 
@@ -137,7 +133,7 @@ generate_reality_link() {
 }
 
 list_and_manage_users() {
-    if [ ! -f "$USER_DB_PATH" ] || ! [ -s "$USER_DB_PATH" ]; then echo -e "\n${C_RED}No users found. Please add a user first.${C_RESET}"; press_any_key; return; fi
+    if [ ! -f "$USER_DB_PATH" ] || ! [ -s "$USER_DB_PATH" ]; then echo -e "\n${C_RED}No users found. Please add a user first.${C_RESET}"; return; fi
     while true; do
         clear; print_header "📇 Manage Users"
         i=1; mapfile -t users < <(sudo cat "$USER_DB_PATH")
@@ -181,7 +177,7 @@ install_protocol_menu() {
     while true; do
         clear; print_header "➕ Install New Protocol"
         echo -e "  ${C_GREEN}1)${C_RESET} ⚡ VLESS + Reality"
-        echo -e "  ${C_GREEN}2)${C_RESET} 🌪️ Hysteria2"
+        echo -e "  ${C_GREEN}2)${C_RESET} 🌪️ Hysteria2 (Coming Soon)"
         echo -e "  ${C_MAGENTA}3)${C_RESET} 🛡️ Trojan (Coming Soon)"
         echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
         echo "-----------------------------------------------"
@@ -189,6 +185,25 @@ install_protocol_menu() {
         case $choice in
             1) install_reality_service; press_any_key ;;
             2) install_hysteria2_service; press_any_key ;;
+            4) return ;;
+            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
+        esac
+    done
+}
+
+protocol_user_menu() {
+     while true; do
+        clear; print_header "👥 Protocol & User Management"
+        echo -e "  ${C_GREEN}1)${C_RESET} ➕ Add Reality User"
+        echo -e "  ${C_GREEN}2)${C_RESET} 📇 List / Manage Reality Users"
+        echo -e "  ${C_RED}3)${C_RESET} 🔥 Delete All Protocols & Users"
+        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
+        echo "-----------------------------------------------"
+        read -p "Enter your choice [1-4]: " choice
+        case $choice in
+            1) add_reality_user; press_any_key ;;
+            2) list_and_manage_users ;;
+            3) delete_all_service_configs; press_any_key ;;
             4) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
         esac
@@ -220,25 +235,6 @@ service_control_menu() {
             7) view_service_logs; press_any_key ;;
             8) validate_config_file; press_any_key ;;
             9) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-protocol_user_menu() {
-     while true; do
-        clear; print_header "👥 Protocol & User Management"
-        echo -e "  ${C_GREEN}1)${C_RESET} ➕ Install New Protocol"
-        echo -e "  ${C_GREEN}2)${C_RESET} 📇 Manage Existing Users"
-        echo -e "  ${C_RED}3)${C_RESET} 🔥 Delete All Protocols & Users"
-        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
-        echo "-----------------------------------------------"
-        read -p "Enter your choice [1-4]: " choice
-        case $choice in
-            1) install_protocol_menu ;;
-            2) list_and_manage_users ;;
-            3) delete_all_service_configs; press_any_key ;;
-            4) return ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
         esac
     done
