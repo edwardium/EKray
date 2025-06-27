@@ -2,7 +2,7 @@
 
 # =================================================================
 # EKray - Smart Management Script
-# Version: 2.0.2 (The Final Stable & Featured Release)
+# Version: 3.0.0 (All-in-One Architecture)
 # Author: Kaveh & Edward
 # GitHub: https://github.com/edwardium/EKray.git
 # =================================================================
@@ -13,14 +13,15 @@ C_YELLOW='\033[0;33m'; C_BLUE='\033[0;34m'; C_MAGENTA='\033[0;35m'
 C_CYAN='\033[0;36m'; C_B_GREEN='\033[1;32m'
 
 # --- Paths ---
-CONFIG_PATH="/etc/sing-box/config.json"
-USER_DB_PATH="/etc/sing-box/users.db"
-PUB_KEY_PATH="/etc/sing-box/reality.pub"
+WORK_DIR="/etc/ekray" # Changed to a dedicated directory
+CONFIG_PATH="${WORK_DIR}/sing-box-config.json"
+NGINX_CONFIG_PATH="/etc/nginx/nginx.conf"
+SUBSCRIPTION_PATH="${WORK_DIR}/sub.txt"
 SINGBOX_BIN_PATH="/usr/local/bin/sing-box"
-SERVICE_PATH="/etc/systemd/system/sing-box.service"
+CLOUDFLARED_BIN_PATH="/usr/local/bin/cloudflared"
 
 #=================================================
-# ALL FUNCTION DEFINITIONS (DEFINED BEFORE USE)
+# ALL FUNCTION DEFINITIONS
 #=================================================
 
 # --- Helper Functions ---
@@ -31,254 +32,273 @@ print_header() {
     printf "${C_B_GREEN}│%*s%s%*s│${C_RESET}\n" "$padding_len" "" "$title" "$((45 - title_len - padding_len))" ""
     printf "${C_B_GREEN}└─────────────────────────────────────────────┘${C_RESET}\n"
 }
-check_dependencies() { DEPS="curl jq qrencode openssl"; for dep in $DEPS; do if ! command -v "$dep" &> /dev/null; then echo -e "${C_YELLOW}Installing dependency: $dep...${C_RESET}"; sudo apt-get update -y && sudo apt-get install -y "$dep"; fi; done; }
+# --- Smart Package Manager ---
+manage_packages() {
+    local action=$1; shift
+    for package in "$@"; do
+        if [ "$action" == "install" ]; then
+            if command -v "$package" &>/dev/null && [ "$package" != "iptables-persistent" ]; then continue; fi
+            echo -e "${C_YELLOW}Installing package: $package...${C_RESET}"
+            if command -v apt-get &>/dev/null; then sudo apt-get-get update -y >/dev/null && sudo apt-get-get install -y "$package"
+            elif command -v dnf &>/dev/null; then sudo dnf install -y "$package"
+            elif command -v yum &>/dev/null; then sudo yum install -y "$package"
+            else echo -e "${C_RED}Unsupported package manager.${C_RESET}"; return 1; fi
+        fi
+    done
+}
+get_server_ip() { curl -4s https://ip.me || curl -4s ifconfig.me; }
 
-# --- Core Logic Functions ---
-initialize_config_if_needed() {
-    if [ ! -f "$CONFIG_PATH" ]; then
-        echo -e "\n${C_YELLOW}Initializing new config file...${C_RESET}"
-        sudo bash -c "cat > $CONFIG_PATH" << EOF
-{ "log": { "level": "info", "timestamp": true }, "inbounds": [], "outbounds": [ { "type": "direct", "tag": "direct" }, { "type": "block", "tag": "block" } ] }
+# --- Core Installation Logic ---
+install_all_in_one() {
+    if [ -f "$CONFIG_PATH" ]; then
+        echo -e "\n${C_RED}EKray is already installed. Please uninstall first for a clean setup.${C_RESET}"
+        return
+    fi
+
+    print_header "🚀 Starting All-in-One Installation"
+
+    # 1. Install Dependencies
+    echo -e "${C_YELLOW}Step 1: Installing dependencies...${C_RESET}"
+    manage_packages install curl jq qrencode openssl nginx
+
+    # 2. Install Core Binaries (sing-box & cloudflared)
+    echo -e "\n${C_YELLOW}Step 2: Installing Core Engines...${C_RESET}"
+    local ARCH; case "$(uname -m)" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; *) echo -e "${C_RED}Unsupported architecture${C_RESET}"; return 1 ;; esac
+
+    # Install sing-box
+    echo "Downloading sing-box..."
+    local LATEST_VERSION=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name')
+    local SINGBOX_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-${ARCH}.tar.gz"
+    curl -sLo sing-box.tar.gz "$SINGBOX_URL"
+    tar -xzf sing-box.tar.gz
+    sudo install -m 755 "sing-box-${LATEST_VERSION#v}-linux-${ARCH}/sing-box" "$SINGBOX_BIN_PATH"
+
+    # Install cloudflared
+    echo "Downloading cloudflared (Argo Tunnel)..."
+    local CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}"
+    sudo curl -sL "$CLOUDFLARED_URL" -o "$CLOUDFLARED_BIN_PATH"
+    sudo chmod +x "$CLOUDFLARED_BIN_PATH"
+
+    # Cleanup
+    rm -rf "sing-box-${LATEST_VERSION#v}-linux-${ARCH}" sing-box.tar.gz
+
+    # 3. Generate Secrets and Ports
+    echo -e "\n${C_YELLOW}Step 3: Generating secrets and ports...${C_RESET}"
+    sudo mkdir -p "$WORK_DIR"
+    local vless_port=$(shuf -i 20000-40000 -n 1)
+    local hy2_port=$(shuf -i 40001-60000 -n 1)
+    local tuic_port=$hy2_port # They can share the port
+    local nginx_port=$(shuf -i 10000-19999 -n 1)
+
+    local uuid=$(sing-box generate uuid)
+    local hy2_password=$(sing-box generate rand --base64 16)
+    local reality_keys=$($SINGBOX_BIN_PATH generate reality-keypair)
+    local private_key=$(echo "$reality_keys" | awk '/PrivateKey/ {print $2}' | tr -d '"')
+    local public_key=$(echo "$reality_keys" | awk '/PublicKey/ {print $2}' | tr -d '"')
+    local sub_path=$(sing-box generate rand --hex 16)
+
+    # Generate self-signed certs
+    sudo openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "${WORK_DIR}/private.key" -out "${WORK_DIR}/cert.pem" -subj "/CN=localhost" -days 3650 &> /dev/null
+
+    # 4. Create sing-box Super-Config
+    echo -e "\n${C_YELLOW}Step 4: Building the Super-Config file...${C_RESET}"
+    sudo bash -c "cat > $CONFIG_PATH" << EOF
+{
+  "log": { "level": "warn", "timestamp": true },
+  "dns": { "servers": [ { "tag": "google", "address": "tls://8.8.8.8" } ] },
+  "inbounds": [
+    {
+      "type": "vless", "tag": "vless-in", "listen": "::", "listen_port": $vless_port,
+      "users": [ { "uuid": "$uuid", "flow": "xtls-rprx-vision" } ],
+      "tls": { "enabled": true, "server_name": "www.microsoft.com", "reality": { "enabled": true, "handshake": { "server": "www.microsoft.com", "server_port": 443 }, "private_key": "$private_key", "short_id": "" } }
+    },
+    {
+      "type": "vmess", "tag": "vmess-ws-in", "listen": "127.0.0.1", "listen_port": 8001,
+      "users": [ { "uuid": "$uuid" } ],
+      "transport": { "type": "ws", "path": "/vmess-argo" }
+    },
+    {
+      "type": "hysteria2", "tag": "hysteria2-in", "listen": "::", "listen_port": $hy2_port,
+      "users": [ { "password": "$hy2_password" } ],
+      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "${WORK_DIR}/cert.pem", "key_path": "${WORK_DIR}/private.key" }
+    },
+    {
+      "type": "tuic", "tag": "tuic-in", "listen": "::", "listen_port": $tuic_port,
+      "users": [ { "uuid": "$uuid", "password": "$hy2_password" } ],
+      "congestion_control": "bbr",
+      "tls": { "enabled": true, "alpn": ["h3"], "certificate_path": "${WORK_DIR}/cert.pem", "key_path": "${WORK_DIR}/private.key" }
+    }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" },
+    {
+      "type": "wireguard", "tag": "warp-out", "server": "engage.cloudflareclient.com", "server_port": 2408,
+      "local_address": ["172.16.0.2/32", "2606:4700:110:812a:4929:7d2a:af62:351c/128"],
+      "private_key": "gBthRjevHDGyV0KvYwYE52NIPy29sSrVr6rcQtYNcXA=",
+      "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+      "reserved": [6, 146, 6]
+    }
+  ],
+  "route": {
+    "rule_set": [
+      { "tag": "geosite-openai", "type": "remote", "format": "binary", "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-openai.srs" }
+    ],
+    "rules": [ { "rule_set": ["geosite-openai"], "outbound": "warp-out" } ]
+  }
+}
 EOF
-        if [ $? -ne 0 ]; then echo -e "${C_RED}Failed to create config file.${C_RESET}"; return 1; fi
-    fi
-    return 0
+
+    # 5. Create Service and Nginx Files
+    echo -e "\n${C_YELLOW}Step 5: Setting up services...${C_RESET}"
+    # sing-box service
+    sudo bash -c "cat > /etc/systemd/system/sing-box.service" << EOF
+[Unit]
+Description=sing-box service
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=${WORK_DIR}
+ExecStart=${SINGBOX_BIN_PATH} run -c ${CONFIG_PATH}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    # argo service
+    sudo bash -c "cat > /etc/systemd/system/argo.service" << EOF
+[Unit]
+Description=Cloudflare Argo Tunnel
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${CLOUDFLARED_BIN_PATH} tunnel --url http://localhost:8001 --no-autoupdate --edge-ip-version auto --protocol http2
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    # nginx config
+    sudo bash -c "cat > $NGINX_CONFIG_PATH" << EOF
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+events { worker_connections 768; }
+http {
+    server {
+        listen $nginx_port;
+        server_name _;
+        location /$sub_path {
+            alias ${SUBSCRIPTION_PATH};
+            default_type 'text/plain; charset=utf-8';
+        }
+    }
+}
+EOF
+
+    # 6. Start Services and Display Info
+    echo -e "\n${C_YELLOW}Step 6: Starting all services...${C_RESET}"
+    sudo systemctl daemon-reload
+    sudo systemctl enable sing-box argo nginx &> /dev/null
+    sudo systemctl restart sing-box argo nginx
+
+    sleep 5 # Give Argo Tunnel time to start and log the domain
+
+    display_all_in_one_info "$vless_port" "$hy2_port" "$tuic_port" "$nginx_port" "$uuid" "$hy2_password" "$public_key" "$sub_path"
+
+    echo -e "\n${C_B_GREEN}✅ All-in-One Super-Config installation is complete!${C_RESET}"
 }
 
-update_server() { echo -e "\n${C_YELLOW}Updating server...${C_RESET}"; if sudo apt-get update -y && sudo apt-get upgrade -y; then echo -e "${C_B_GREEN}Server updated successfully!${C_RESET}"; else echo -e "${C_RED}An error occurred.${C_RESET}"; fi; }
+# --- Function to display all connection info ---
+display_all_in_one_info() {
+    local vless_port=$1; local hy2_port=$2; local tuic_port=$3; local nginx_port=$4;
+    local uuid=$5; local hy2_password=$6; local public_key=$7; local sub_path=$8
 
-install_singbox() {
-    if command -v sing-box &> /dev/null; then echo -e "\n${C_GREEN}sing-box is already installed.${C_RESET}"; return; fi
-    echo -e "\n${C_YELLOW}Installing sing-box...${C_RESET}"; local ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; *) echo -e "${C_RED}Unsupported architecture${C_RESET}"; return 1 ;; esac
-    local LATEST_VERSION=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name'); if [ -z "$LATEST_VERSION" ]; then echo -e "${C_RED}Error getting latest version.${C_RESET}"; return 1; fi
-    echo "Latest version: $LATEST_VERSION"; local DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-${ARCH}.tar.gz"
-    echo "Downloading..."; if ! curl -sLo sing-box.tar.gz "$DOWNLOAD_URL"; then echo -e "${C_RED}Download failed.${C_RESET}"; return 1; fi
-    local EXTRACT_DIR="sing-box-${LATEST_VERSION#v}-linux-${ARCH}"; tar -xzf sing-box.tar.gz; sudo install -m 755 "${EXTRACT_DIR}/sing-box" "$SINGBOX_BIN_PATH"; sudo mkdir -p /etc/sing-box/; rm -rf "${EXTRACT_DIR}" sing-box.tar.gz
-    if [ ! -f "$SERVICE_PATH" ]; then create_service_file; fi; echo -e "${C_B_GREEN}sing-box core installed successfully.${C_RESET}"
+    local server_ip=$(get_server_ip)
+    local isp_info=$(curl -s https://speed.cloudflare.com/meta | awk -F\" '{print $26"-"$18}' | sed 's/ /_/g' || echo "EKray")
+
+    echo -e "\n${C_YELLOW}Fetching Argo Tunnel domain (please wait)...${C_RESET}"
+    local argo_domain
+    for i in {1..5}; do
+        argo_domain=$(sudo journalctl -u argo -n 10 --no-pager | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' | head -n 1 | sed 's/https:\/\///')
+        if [ -n "$argo_domain" ]; then break; fi
+        sleep 2
+    done
+
+    if [ -z "$argo_domain" ]; then echo -e "${C_RED}Could not fetch Argo domain. Please check 'systemctl status argo'.${C_RESET}"; fi
+
+    local vless_link="vless://${uuid}@${server_ip}:${vless_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=${public_key}&type=tcp#${isp_info}-Reality"
+    local vmess_ws_link="vmess://$(echo "{\"v\":\"2\",\"ps\":\"${isp_info}-Argo\",\"add\":\"www.visa.com.tw\",\"port\":\"443\",\"id\":\"${uuid}\",\"net\":\"ws\",\"path\":\"/vmess-argo\",\"tls\":\"tls\",\"sni\":\"${argo_domain}\"}" | base64 -w0)"
+    local hy2_link="hysteria2://${hy2_password}@${server_ip}:${hy2_port}/?sni=localhost&insecure=1#${isp_info}-Hysteria2"
+    local tuic_link="tuic://${uuid}:${hy2_password}@${server_ip}:${tuic_port}?sni=localhost&congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=1#${isp_info}-TUIC"
+
+    local sub_content="${vless_link}\n${vmess_ws_link}\n${hy2_link}\n${tuic_link}"
+    echo -e "$sub_content" | sudo tee "${WORK_DIR}/url.txt" > /dev/null
+    echo -e "$sub_content" | base64 -w0 | sudo tee "$SUBSCRIPTION_PATH" > /dev/null
+    local sub_link="http://${server_ip}:${nginx_port}/${sub_path}"
+
+    clear; print_header "✅ Installation Complete!"
+    echo -e "Here are your connection details:\n"
+    echo -e "${C_CYAN}--- VLESS + Reality ---${C_RESET}"; echo "$vless_link"
+    echo -e "${C_CYAN}--- VMess + WebSocket (Argo) ---${C_RESET}"; echo "$vmess_ws_link"
+    echo -e "${C_CYAN}--- Hysteria2 ---${C_RESET}"; echo "$hy2_link"
+    echo -e "${C_CYAN}--- TUICv5 ---${C_RESET}"; echo "$tuic_link"
+    echo -e "\n-----------------------------------------------"
+    echo -e "${C_B_GREEN}⭐ Subscription Link (copy this into your client):${C_RESET}"
+    echo -e "${C_YELLOW}$sub_link${C_RESET}"
+    echo -e "\n${C_B_GREEN}📱 Or scan the QR Code:${C_RESET}"
+    qrencode -t UTF8 -m 1 "$sub_link"
+    echo "==============================================="
 }
 
-create_service_file() { echo -e "${C_YELLOW}Creating systemd service file...${C_RESET}"; SERVICE_FILE_CONTENT="[Unit]\nDescription=sing-box service\nAfter=network.target\n\n[Service]\nUser=root\nWorkingDirectory=/etc/sing-box\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nExecStart=${SINGBOX_BIN_PATH} run -c ${CONFIG_PATH}\nRestart=on-failure\nRestartSec=10\nLimitNOFILE=infinity\n\n[Install]\nWantedBy=multi-user.target"; echo -e "$SERVICE_FILE_CONTENT" | sudo tee "$SERVICE_PATH" > /dev/null; sudo systemctl daemon-reload; sudo systemctl enable sing-box; echo -e "${C_GREEN}Service file created and enabled.${C_RESET}"; }
-
-system_status_check() {
-    echo -e "\n${C_YELLOW}--- System Status Check ---${C_RESET}"
-    echo -n "1. Core: "; if [ -f "$SINGBOX_BIN_PATH" ]; then echo -e "${C_GREEN}Installed ($($SINGBOX_BIN_PATH version | awk '{print $3}'))${C_RESET}"; else echo -e "${C_RED}Not Found${C_RESET}"; fi
-    echo -n "2. Config Dir: "; if [ -d "/etc/sing-box" ]; then echo -e "${C_GREEN}Found${C_RESET}"; else echo -e "${C_RED}Not Found${C_RESET}"; fi
-    echo -n "3. Service: "; if [ -f "$SERVICE_PATH" ]; then SERVICE_STATUS=$(systemctl is-active sing-box); if [ "$SERVICE_STATUS" == "active" ]; then echo -e "${C_GREEN}Active (Running)${C_RESET}"; else echo -e "${C_RED}Inactive (Status: $SERVICE_STATUS)${C_RESET}"; fi; else echo -e "${C_RED}Not Found${C_RESET}"; fi
-    echo "---------------------------"
-}
-
-uninstall_ekray() { echo -e "\n${C_RED}WARNING: This will REMOVE ALL EKray files.${C_RESET}"; read -p "Are you sure? (y/n): " confirm; if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then sudo systemctl stop sing-box &> /dev/null; sudo systemctl disable sing-box &> /dev/null; sudo rm -f "$SERVICE_PATH"; sudo rm -f "$SINGBOX_BIN_PATH"; sudo rm -rf "/etc/sing-box/"; sudo systemctl daemon-reload; echo -e "\n${C_B_GREEN}EKray and sing-box core have been completely uninstalled.${C_RESET}"; else echo -e "\n${C_YELLOW}Uninstall cancelled.${C_RESET}"; fi; }
-
-delete_all_service_configs() {
-    if [ ! -f "$CONFIG_PATH" ]; then echo -e "\n${C_YELLOW}No service configuration found to delete.${C_RESET}"; return; fi
-    echo -e "\n${C_RED}WARNING: This will delete ALL protocol configurations and users.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
+# --- Uninstall Function ---
+uninstall_ekray() {
+    echo -e "\n${C_RED}WARNING: This will REMOVE ALL EKray files & services.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        sudo systemctl stop sing-box
-        sudo rm -f "$CONFIG_PATH" "$USER_DB_PATH" "$PUB_KEY_PATH" &> /dev/null
-        initialize_config_if_needed &> /dev/null
-        echo -e "\n${C_GREEN}All protocol configurations and users have been deleted.${C_RESET}"
+        sudo systemctl stop sing-box argo nginx &> /dev/null
+        sudo systemctl disable sing-box argo nginx &> /dev/null
+        sudo rm -f /etc/systemd/system/{sing-box,argo,nginx}.service
+        sudo rm -f "$SINGBOX_BIN_PATH" "$CLOUDFLARED_BIN_PATH"
+        sudo rm -rf "$WORK_DIR"
+        manage_packages uninstall nginx
+        sudo systemctl daemon-reload
+        echo -e "\n${C_B_GREEN}EKray has been completely uninstalled.${C_RESET}"
     else
-        echo -e "\n${C_YELLOW}Deletion cancelled.${C_RESET}"
+        echo -e "\n${C_YELLOW}Uninstall cancelled.${C_RESET}"
     fi
 }
 
-install_reality_service() {
-    initialize_config_if_needed || return
-    if jq -e '.inbounds[] | select(.tag == "vless-reality-in")' "$CONFIG_PATH" > /dev/null; then echo -e "\n${C_RED}Reality service is already installed.${C_RESET}"; return; fi
-    echo -e "\n${C_YELLOW}Installing VLESS+Reality...${C_RESET}"; read -p "Enter listen port (default: 443): " listen_port; listen_port=${listen_port:-443}; read -p "Enter SNI domain (default: www.microsoft.com): " server_name; server_name=${server_name:-www.microsoft.com}
-    echo "Generating Reality key pair..."; REALITY_KEYS=$($SINGBOX_BIN_PATH generate reality-keypair); PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $2}' | tr -d '",'); PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $2}' | tr -d '",'); RANDOM_SHORT_ID=$(openssl rand -hex 8)
-    REALITY_INBOUND=$(jq -n --argjson port "$listen_port" --arg sni "$server_name" --arg p_key "$PRIVATE_KEY" --arg s_id "$RANDOM_SHORT_ID" '{ "type": "vless", "tag": "vless-reality-in", "listen": "::", "listen_port": $port, "users": [], "tls": { "enabled": true, "server_name": $sni, "reality": { "enabled": true, "handshake": { "server": $sni, "server_port": 443 }, "private_key": $p_key, "short_id": $s_id } } }'); tmp_json=$(mktemp); jq --argjson new_inbound "$REALITY_INBOUND" '.inbounds += [$new_inbound]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"; echo "$PUBLIC_KEY" | sudo tee "$PUB_KEY_PATH" > /dev/null
-    echo -e "\n${C_GREEN}Reality inbound added. Restarting service...${C_RESET}"; sudo systemctl restart sing-box; sleep 1; echo "Service status after installation:"; system_status_check
-    echo -e "\n${C_YELLOW}No users created for Reality yet. Please use 'User Management' to add a user.${C_RESET}"
-}
-
-install_hysteria2_service() {
-    # (Logic for Hysteria2 installation remains here for future use)
-    echo -e "\n${C_MAGENTA}Hysteria2 installation is being polished and will be available soon.${C_RESET}"
-}
-
-add_reality_user() {
-    if ! jq -e '.inbounds[] | select(.tag == "vless-reality-in")' "$CONFIG_PATH" > /dev/null; then echo -e "\n${C_RED}Reality service not installed. Please install it first.${C_RESET}"; return; fi
-    read -p "Enter a name for the new user: " user_name; if [ -z "$user_name" ]; then echo -e "${C_RED}User name cannot be empty.${C_RESET}"; return; fi
-    new_uuid=$($SINGBOX_BIN_PATH generate uuid); tmp_json=$(mktemp)
-    jq --arg uuid "$new_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users += [{"uuid": $uuid, "flow": "xtls-rprx-vision"}]' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
-    echo "${user_name}:${new_uuid}" | sudo tee -a "$USER_DB_PATH" > /dev/null; sudo systemctl restart sing-box; sleep 1
-    echo -e "\n${C_B_GREEN}User '${user_name}' added successfully!${C_RESET}"
-    generate_reality_link "$user_name" "$new_uuid"
-}
-
-delete_single_user() {
-    local user_name=$1; local user_uuid=$2
-    echo -e "\n${C_RED}WARNING: You are about to delete user '${user_name}'.${C_RESET}"; read -p "Are you sure? (y/n): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then echo -e "\n${C_YELLOW}Deletion cancelled.${C_RESET}"; return; fi
-    echo "Removing user from config..."; tmp_json=$(mktemp)
-    jq --arg uuid "$user_uuid" '(.inbounds[] | select(.tag == "vless-reality-in")).users |= del(.[] | select(.uuid == $uuid))' "$CONFIG_PATH" > "$tmp_json"; sudo mv "$tmp_json" "$CONFIG_PATH"
-    echo "Removing user from database..."; sudo sed -i "/${user_uuid}/d" "$USER_DB_PATH"
-    echo "Restarting service..."; sudo systemctl restart sing-box; sleep 1
-    echo -e "\n${C_B_GREEN}User '${user_name}' has been deleted successfully.${C_RESET}"
-}
-
-generate_reality_link() {
-    local user_name=$1; local uuid=$2;
-    if [ "$3" != "no_clear" ]; then clear; fi
-    local server_ip=$(curl -4s https://ip.me); local port=$(jq '.inbounds[] | select(.tag == "vless-reality-in") | .listen_port' $CONFIG_PATH); local sni=$(jq -r '.inbounds[] | select(.tag == "vless-reality-in") | .tls.server_name' $CONFIG_PATH)
-    local pbk=$(sudo cat "$PUB_KEY_PATH"); local sid=$(jq -r '.inbounds[] | select(.tag == "vless-reality-in") | .tls.reality.short_id' $CONFIG_PATH)
-    VLESS_LINK="vless://${uuid}@${server_ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#EKray-${user_name}"
-
-    print_header "👤 Connection Info: ${user_name}"
-    echo -e " ${C_GREEN}Server IP:${C_RESET}         ${server_ip}"; echo -e " ${C_GREEN}Listen Port:${C_RESET}       ${port}"; echo -e " ${C_GREEN}User UUID:${C_RESET}         ${uuid}"; echo -e " ${C_GREEN}Server Name (SNI):${C_RESET} ${sni}"; echo -e " ${C_GREEN}Public Key:${C_RESET}        ${pbk}"; echo -e " ${C_GREEN}Short ID:${C_RESET}          ${sid}";
-    echo "-----------------------------------------------"; echo -e " ${C_YELLOW}🔗 VLESS Link (for V2Ray, etc.):${C_RESET}"; echo "   $VLESS_LINK";
-    echo "-----------------------------------------------"; echo -e " ${C_YELLOW}📱 QR Code (for mobile clients):${C_RESET}"; qrencode -t UTF8 -m 1 "$VLESS_LINK"; echo "==============================================="
-}
-
-list_and_manage_users() {
-    if [ ! -f "$USER_DB_PATH" ] || ! [ -s "$USER_DB_PATH" ]; then echo -e "\n${C_RED}No users found. Please add a user first.${C_RESET}"; return; fi
-    while true; do
-        clear; print_header "📇 Manage Users"
-        i=1; mapfile -t users < <(sudo cat "$USER_DB_PATH")
-        for user_line in "${users[@]}"; do
-            local name=$(echo "$user_line" | cut -d: -f1); local uuid=$(echo "$user_line" | cut -d: -f2)
-            echo -e "  ${C_GREEN}${i})${C_RESET} Name: ${C_YELLOW}${name}${C_RESET}  (UUID: ${uuid:0:8}...)"
-            ((i++))
-        done
-        echo "-----------------------------------------------"
-        read -p "Enter user number to manage (or 0 to go back): " user_number
-        if [[ "$user_number" == "0" ]]; then break; fi
-        if ! [[ "$user_number" =~ ^[0-9]+$ ]] || [ "$user_number" -gt "${#users[@]}" ]; then echo -e "\n${C_RED}Invalid selection.${C_RESET}"; sleep 2; continue; fi
-        local selected_user_line="${users[$((user_number-1))]}"; local user_name=$(echo "$selected_user_line" | cut -d: -f1); local user_uuid=$(echo "$selected_user_line" | cut -d: -f2)
-        manage_single_user "$user_name" "$user_uuid"
-    done
-}
-
-manage_single_user() {
-    local user_name=$1; local user_uuid=$2
-    while true; do
-        clear; print_header "👤 Managing User: ${user_name}";
-        echo "  1) View User Config / QR Code"; echo "  2) Delete User"; echo "  3) Back to User List"
-        echo "-----------------------------------------------"; read -p "Enter choice [1-3]: " manage_choice
-        case $manage_choice in
-            1) generate_reality_link "$user_name" "$user_uuid" "no_clear"; press_any_key ;;
-            2) delete_single_user "$user_name" "$user_uuid"; press_any_key; return ;;
-            3) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-view_service_logs() { echo -e "\n${C_YELLOW}Showing last 50 lines of sing-box logs...${C_RESET}"; sudo journalctl -u sing-box -n 50 --no-pager; }
-validate_config_file() { if [ ! -f "$CONFIG_PATH" ]; then echo -e "\n${C_RED}No config file found to validate.${C_RESET}"; return; fi; echo -e "\n${C_YELLOW}Validating config...${C_RESET}"; sudo "$SINGBOX_BIN_PATH" check -c "$CONFIG_PATH"; }
-
 #=================================================
-# MENU FUNCTION DEFINITIONS (CALL THE LOGIC)
+# SCRIPT EXECUTION STARTS HERE
 #=================================================
 
-install_protocol_menu() {
-    while true; do
-        clear; print_header "➕ Install New Protocol"
-        echo -e "  ${C_GREEN}1)${C_RESET} ⚡ VLESS + Reality"
-        echo -e "  ${C_MAGENTA}2)${C_RESET} 🌪️ Hysteria2 (Coming Soon)"
-        echo -e "  ${C_YELLOW}3)${C_RESET} ↩️ Back"
-        echo "-----------------------------------------------"
-        read -p "Choose a protocol to install [1-3]: " choice
-        case $choice in
-            1) install_reality_service; press_any_key ;;
-            2) install_hysteria2_service; press_any_key ;;
-            3) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-protocol_user_menu() {
-     while true; do
-        clear; print_header "👥 Protocol & User Management"
-        echo -e "  ${C_GREEN}1)${C_RESET} ➕ Add Reality User"
-        echo -e "  ${C_GREEN}2)${C_RESET} 📇 List / Manage Reality Users"
-        echo -e "  ${C_RED}3)${C_RESET} 🔥 Delete All Protocols & Users"
-        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
-        echo "-----------------------------------------------"
-        read -p "Enter your choice [1-4]: " choice
-        case $choice in
-            1) add_reality_user; press_any_key ;;
-            2) list_and_manage_users ;;
-            3) delete_all_service_configs; press_any_key ;;
-            4) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-service_control_menu() {
-    while true; do
-        clear; print_header "⚙️ Service & System Control"
-        echo -e "  ${C_GREEN}1)${C_RESET} ▶️ Start sing-box Service"
-        echo -e "  ${C_RED}2)${C_RESET} ⏹️ Stop sing-box Service"
-        echo -e "  ${C_YELLOW}3)${C_RESET} 🔄 Restart sing-box Service"
-        echo "-----------------------------------------------"
-        echo -e "  ${C_CYAN}4)${C_RESET} 🩺 System Status Check"
-        echo -e "  ${C_CYAN}5)${C_RESET} 📜 View Service Logs"
-        echo -e "  ${C_CYAN}6)${C_RESET} ✅ Validate Config File"
-        echo "-----------------------------------------------"
-        echo -e "  ${C_YELLOW}7)${C_RESET} ↩️ Back"
-        read -p "Enter your choice [1-7]: " choice
-        case $choice in
-            1) sudo systemctl start sing-box; echo -e "\n${C_GREEN}Start command sent.${C_RESET}"; press_any_key ;;
-            2) sudo systemctl stop sing-box; echo -e "\n${C_GREEN}Stop command sent.${C_RESET}"; press_any_key ;;
-            3) sudo systemctl restart sing-box; echo -e "\n${C_GREEN}Restart command sent.${C_RESET}"; press_any_key ;;
-            4) system_status_check; press_any_key ;;
-            5) view_service_logs; press_any_key ;;
-            6) validate_config_file; press_any_key ;;
-            7) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-installation_menu() {
-    while true; do
-        clear; print_header "📦 Installation & Core"
-        echo -e "  ${C_GREEN}1)${C_RESET} 🔄 Update Server & Dependencies"
-        echo -e "  ${C_GREEN}2)${C_RESET} 📥 Install sing-box Core"
-        echo -e "  ${C_RED}3)${C_RESET} 🗑️ Uninstall EKray & Core"
-        echo -e "  ${C_YELLOW}4)${C_RESET} ↩️ Back"
-        echo "-----------------------------------------------"
-        read -p "Enter your choice [1-4]: " choice
-        case $choice in
-            1) update_server; press_any_key ;;
-            2) install_singbox; press_any_key ;;
-            3) uninstall_ekray; press_any_key ;;
-            4) return ;;
-            *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
-        esac
-    done
-}
-
-# --- Main Entrypoint ---
 main_menu() {
     while true; do
-        clear; print_header "🚀 EKray Panel v2.0.2 🚀"
-        echo -e "   ${C_CYAN}by Edward & Kaveh${C_RESET}"
-        echo ""; echo -e "  ${C_YELLOW}1)${C_RESET} 📦 Installation & Core Management"
-        echo -e "  ${C_YELLOW}2)${C_RESET} 👥 Protocol & User Management"
-        echo -e "  ${C_YELLOW}3)${C_RESET} ⚙️  Service & System Control"
-        echo -e "  ${C_YELLOW}4)${C_RESET} 🛠️  Advanced Tools ${C_MAGENTA}(Coming Soon)${C_RESET}"
+        clear; print_header "🚀 EKray Panel v3.0.0 🚀"
+        echo -e "   ${C_CYAN}by Edward & Kaveh${C_RESET}\n"
+        echo -e "  ${C_YELLOW}1)${C_RESET} 🚀 Install All-in-One Super-Config"
+        echo -e "  ${C_YELLOW}2)${C_RESET} ℹ️  View Connection Info"
+        echo -e "  ${C_YELLOW}3)${C_RESET} ⚙️  Service Control"
+        echo -e "  ${C_RED}4)${C_RESET} 🗑️ Uninstall Everything"
         echo -e "  ${C_RED}5)${C_RESET} 🚪 Exit"
         echo "-----------------------------------------------"
         read -p "Enter your choice [1-5]: " choice
         case $choice in
-            1) installation_menu ;;
-            2) protocol_user_menu ;;
-            3) service_control_menu ;;
-            4) echo -e "\n${C_MAGENTA}Advanced tools will be added later.${C_RESET}"; press_any_key ;;
+            1) install_all_in_one; press_any_key ;;
+            2) display_all_in_one_info; press_any_key ;; # Needs parameters, needs rework
+            3) # Placeholder for service control
+               press_any_key ;;
+            4) uninstall_ekray; press_any_key ;;
             5) echo -e "\n${C_BLUE}Goodbye!${C_RESET}"; exit 0 ;;
             *) echo -e "\n${C_RED}Invalid option.${C_RESET}"; sleep 2 ;;
         esac
     done
 }
 
-
-#=================================================
-# SCRIPT EXECUTION STARTS HERE
-#=================================================
 check_dependencies
 main_menu
+
